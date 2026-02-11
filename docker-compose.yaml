@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  sign-app:
+    image: python:3.9-slim
+    container_name: app-sign
+    volumes:
+      - /volume1/docker/app-sign:/app
+    working_dir: /app
+    environment:
+      - TZ=Asia/Shanghai
+    command: >
+      sh -c "pip install requests pyyaml cryptography && python -u run_sign.py"
+    restart: always
