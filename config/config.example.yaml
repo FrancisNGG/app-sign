@@ -40,6 +40,24 @@ sites:
     random_range: 0
 
 # 通知配置（可选）
+# 支持多种推送方式，配置为列表形式
 notify:
-  # 企业微信
-  weixin_robot_key: ""       # 企业微信 WebHook Key，用于发送通知
+  # Bark 推送服务
+  - bark:
+      enabled: false             # 是否启用 Bark 推送
+      key: ""                    # Bark API 密钥，获取方式: 在 Bark App 中查看
+      group: "app-sign"          # 推送通知分组，用于在 Bark App 中分类显示（默认为 app-sign）
+      sound: "silence"           # 通知音，可选值: silence, alarm, bell, birdsong, cashregister, drop, fanfare, glass, horn, pong, siren, squeak 等
+      icon: ""                   # 通知图标 URL（可选）
+      url: ""                    # 点击通知后打开的 URL（可选）
+  
+  # Telegram 推送服务（暂未支持，可在此处配置预留）
+  # - telegram:
+  #     enabled: false
+  #     token: ""                # Telegram Bot Token
+  #     chat_id: ""              # 目标 Chat ID
+  
+  # 企业微信推送服务（暂未支持，可在此处配置预留）
+  # - wechat:
+  #     enabled: false
+  #     webhook_key: ""          # 企业微信 WebHook Key
