@@ -3,14 +3,19 @@
 统一签到脚本 - 主入口
 支持多个论坛/网站的自动签到
 包含错误重试机制
+Cookie保活由独立的 cookie_keepalive 模块管理
 """
+import sys
+import argparse
 import yaml
 import time
 import random
 import threading
 from datetime import datetime, timedelta
 from modules.notify import push_notification
-from modules import right, pcbeta, smzdm, youdao, tieba, acfun, bilibili, sync_cookies
+from modules import right, pcbeta, smzdm, youdao, tieba, acfun, bilibili, sync_cookies, cookie_keepalive, cookie_metadata
+import os
+import logging
 
 # 全局任务表
 daily_tasks = []
@@ -19,6 +24,84 @@ last_schedule_date = None
 # 重试任务队列
 retry_queue = []
 retry_queue_lock = threading.Lock()
+# Cookie 保活队列
+keepalive_queue = []
+keepalive_queue_lock = threading.Lock()
+# 初始化 Cookie 保活任务（用来追踪下次执行时间）
+keepalive_tasks = {}  # {site_name: {'next_exec_time': datetime, 'site': site}}
+
+
+def setup_logging():
+    """
+    初始化日志系统
+    - 同时输出到 stdout 和日志文件
+    - 日志文件以启动时间命名（精确到秒）
+    """
+    logs_dir = "logs"
+    if not os.path.exists(logs_dir):
+        os.makedirs(logs_dir, exist_ok=True)
+    
+    # 生成日志文件名（启动时间精确到秒）
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(logs_dir, f"sign_{timestamp}.log")
+    
+    # 配置日志格式
+    log_format = "%(asctime)s [%(levelname)s] %(message)s"
+    date_format = "%Y-%m-%d %H:%M:%S"
+    
+    # 创建 logger
+    logger = logging.getLogger()
+    # 清除已有的处理器（防止重复添加）
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    
+    logger.setLevel(logging.INFO)
+    
+    # 文件处理器
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter(log_format, datefmt=date_format))
+    
+    # 控制台处理器（输出到 stdout，用于 docker 容器显示）
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter(log_format, datefmt=date_format))
+    
+    # 添加处理器
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    # 重定向 stdout 和 stderr，让 print() 也输出到日志文件
+    class DualOutput:
+        def __init__(self, log_file_path, original_stdout, original_stderr):
+            self.terminal_out = original_stdout
+            self.terminal_err = original_stderr
+            self.log_file = open(log_file_path, 'a', encoding='utf-8')
+            self.is_stderr = False
+        
+        def write(self, message):
+            # 同时写入控制台和日志文件
+            self.terminal_out.write(message)
+            self.log_file.write(message)
+            self.log_file.flush()
+        
+        def flush(self):
+            self.terminal_out.flush()
+            self.log_file.flush()
+        
+        def isatty(self):
+            return False
+    
+    # 保存原始的 stdout/stderr
+    original_stdout = sys.stdout if not isinstance(sys.stdout, DualOutput) else sys.stdout.terminal_out
+    original_stderr = sys.stderr if not isinstance(sys.stderr, DualOutput) else sys.stderr.terminal_out
+    
+    # 重定向输出
+    sys.stdout = DualOutput(log_file, original_stdout, original_stderr)
+    sys.stderr = DualOutput(log_file, original_stdout, original_stderr)
+    
+    logging.info(f"日志系统初始化完成，日志文件: {log_file}")
+    return log_file
 
 
 def load_config():
@@ -396,6 +479,157 @@ def check_and_regenerate_tasks(config):
     
     return False
 
+
+def initialize_keepalive_tasks(config):
+    """
+    初始化 Cookie 保活任务
+    
+    为所有需要保活的网站创建保活任务，计算起始的下次执行时间
+    
+    Args:
+        config: 配置字典
+    """
+    global keepalive_tasks
+    
+    sites = config.get('sites', [])
+    
+    for site in sites:
+        name = site.get('name', '')
+        
+        # 只对恩山论坛启用Cookie保活（可扩展）
+        if '恩山' not in name or not site.get('cookie'):
+            continue
+        
+        # 计算下次执行时间
+        cookie_dict = cookie_keepalive.parse_cookie_string(site.get('cookie', ''))
+        next_exec_time = cookie_keepalive.calculate_next_refresh_time(cookie_dict)
+        
+        keepalive_tasks[name] = {
+            'site': site,
+            'next_exec_time': next_exec_time,
+            'last_check': None
+        }
+        
+        print(f"[初始化] {name} Cookie保活任务")
+        print(f"  下次执行时间: {next_exec_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+
+def execute_keepalive_task(site_name, config):
+    """
+    执行单个Cookie保活任务
+    
+    Args:
+        site_name: 网站名称
+        config: 配置字典
+        
+    Returns:
+        bool: 是否执行成功
+    """
+    global keepalive_tasks
+    
+    if site_name not in keepalive_tasks:
+        return False
+    
+    site = keepalive_tasks[site_name]['site']
+    
+    # 执行保活任务
+    result = cookie_keepalive.keepalive_task(site, config)
+    
+    # 更新下次执行时间
+    keepalive_tasks[site_name]['next_exec_time'] = result['next_exec_time']
+    keepalive_tasks[site_name]['last_check'] = datetime.now()
+    
+    # 如果失败，添加到重试队列（由keepalive_task处理）
+    # 这里我们只是记录结果
+    
+    return result['success']
+
+
+def check_keepalive_tasks(config):
+    """
+    检查是否有Cookie保活任务需要执行
+    
+    Args:
+        config: 配置字典
+        
+    Yields:
+        tuple: (site_name, site_config)
+    """
+    global keepalive_tasks
+    
+    now = datetime.now()
+    
+    for site_name, task_info in keepalive_tasks.items():
+        next_exec_time = task_info['next_exec_time']
+        
+        # 如果当前时间已到或超过下次执行时间
+        if now >= next_exec_time:
+            yield site_name, task_info['site']
+
+
+def check_cookies_status(config):
+    """
+    检查所有网站的 Cookie 状态
+    
+    Args:
+        config: 配置字典
+    """
+    from datetime import timezone
+    
+    print(f"\n{'='*80}")
+    print("🔍 Cookie 状态检查")
+    print(f"{'='*80}\n")
+    
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    
+    for site in config.get('sites', []):
+        name = site.get('name', '未知')
+        has_cookie = bool(site.get('cookie'))
+        metadata_dict = site.get('cookie_metadata', {})
+        
+        print(f"\n【{name}】")
+        print(f"  配置 Cookie: {'✅ 有' if has_cookie else '❌ 无'}")
+        
+        if has_cookie and metadata_dict:
+            metadata = cookie_metadata.CookieMetadata(metadata_dict)
+            print(f"  来源: {metadata.source}")
+            print(f"  最后更新: {metadata.last_updated}")
+            print(f"  刷新尝试: {metadata.refresh_attempts} 次")
+            
+            remaining = metadata.get_remaining_hours(now)
+            if metadata.is_valid(now):
+                print(f"  状态: ✅ 有效")
+                print(f"  剩余时间: {remaining:.1f} 小时")
+                print(f"  截止时间: {metadata.valid_until}")
+            else:
+                print(f"  状态: ❌ 已过期")
+                print(f"  过期时长: {abs(remaining):.1f} 小时")
+                print(f"  截止时间: {metadata.valid_until}")
+        elif has_cookie:
+            print(f"  元数据: 未记录（旧格式 Cookie）")
+    
+    print(f"\n{'='*80}\n")
+
+
+def sync_all_cookies(config):
+    """
+    手动同步所有 Cookie
+    
+    Args:
+        config: 配置字典
+    """
+    print(f"\n{'='*80}")
+    print("🔄 手动同步 Cookie")
+    print(f"{'='*80}\n")
+    
+    if not sync_cookies.sync_cookies():
+        print("❌ 同步失败")
+        return False
+    
+    print("✅ 同步成功")
+    return True
+
+
 def main():
     """
     主函数 - 基于任务表的定时签到调度器
@@ -408,16 +642,47 @@ def main():
     5. 已执行的任务不会重复执行
     6. 失败任务自动加入重试队列，在配置的延迟时间后重试
     """
-    print(f"\n{'='*60}")
-    print(f"自动签到服务启动")
-    print(f"启动时间: {datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}")
-    print(f"{'='*60}\n")
+    # 初始化日志系统
+    setup_logging()
+    
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(
+        description='App Sign - 自动签到服务',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+示例：
+  python3 run_sign.py              # 正常运行，开始定时签到
+  python3 run_sign.py --check-cookie   # 检查所有网站的 Cookie 状态
+  python3 run_sign.py --sync-cookies   # 手动同步一次 Cookie
+        '''
+    )
+    parser.add_argument('--check-cookie', action='store_true',
+                       help='检查所有网站的 Cookie 状态并显示有效期')
+    parser.add_argument('--sync-cookies', action='store_true',
+                       help='手动同步一次 CookieCloud')
+    
+    args = parser.parse_args()
     
     # 加载配置
     config = load_config()
     if not config:
         print("[错误] 无法加载配置文件")
         return
+    
+    # 处理 --check-cookie 参数
+    if args.check_cookie:
+        check_cookies_status(config)
+        return
+    
+    # 处理 --sync-cookies 参数
+    if args.sync_cookies:
+        sync_all_cookies(config)
+        return
+    
+    print(f"\n{'='*60}")
+    print(f"自动签到服务启动")
+    print(f"启动时间: {datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}")
+    print(f"{'='*60}\n")
     
     # 显示重试配置
     retry_config = get_retry_config(config)
@@ -427,6 +692,9 @@ def main():
     print(f"  重试延迟: {retry_config['retry_delay_hours']} 小时\n")
     
     # 首次启动时尝试同步 Cookie
+    # ⚠️ 重要：不再启用自动定期 CookieCloud 同步
+    # 原因：会用过期 Cookie 覆盖 Playwright 刚刷新的新 Cookie
+    # 新策略：CookieCloud 只在 Playwright 保活失败时用作故障恢复
     cookiecloud_enabled = False
     try:
         # 检查是否配置了 CookieCloud
@@ -435,30 +703,22 @@ def main():
             cookiecloud_config.get('uuid') and 
             cookiecloud_config.get('password')):
             
-            print("🔄 检测到 CookieCloud 配置，正在同步 Cookie...\n")
-            
-            # 立即同步一次
-            if sync_cookies.sync_cookies():
-                # 重新加载配置以获取最新的 Cookie
-                config = load_config()
-                cookiecloud_enabled = True
-                
-                # 启动定期同步任务
-                sync_interval = cookiecloud_config.get('sync_time', 60)
-                print(f"\n🔄 启动 Cookie 定期同步任务...\n")
-                sync_cookies.start_sync_task(config, sync_interval)
-            else:
-                print("⚠️  首次 Cookie 同步失败，跳过定期同步\n")
+            print("ℹ️  检测到 CookieCloud 配置（不启用自动同步，仅用于故障恢复）")
+            print("   Playwright 保活为主，失败时才同步 CookieCloud\n")
+            cookiecloud_enabled = True
         else:
-            print("ℹ️  未配置 CookieCloud，跳过 Cookie 同步\n")
+            print("ℹ️  未配置 CookieCloud，将仅使用 Playwright 保活\n")
     except Exception as e:
-        print(f"⚠️  Cookie 同步失败: {e}")
-        import traceback
-        traceback.print_exc()
-        print("   继续使用现有配置...\n")
+        print(f"⚠️  检查 CookieCloud 配置失败: {e}\n")
     
     # 首次启动时生成任务表
     check_and_regenerate_tasks(config)
+    
+    # 初始化 Cookie 保活任务
+    try:
+        initialize_keepalive_tasks(config)
+    except Exception as e:
+        print(f"⚠️  初始化 Cookie 保活任务失败: {e}\n")
     
     print(f"开始监控任务执行...\n")
     
@@ -488,6 +748,44 @@ def main():
             # 检查是否需要重新生成任务表（每天0点）
             if check_and_regenerate_tasks(config):
                 print(f"[{now.strftime('%H:%M:%S')}] 任务表已更新\n")
+            
+            # ==================== 检查和执行 Cookie 保活任务 ====================
+            keepalive_tasks_to_execute = list(check_keepalive_tasks(config))
+            
+            if keepalive_tasks_to_execute:
+                print(f"\n[{now.strftime('%H:%M:%S')}] 检测到 {len(keepalive_tasks_to_execute)} 个 Cookie 保活任务需要执行")
+                
+                keepalive_threads = []
+                for site_name, site_config in keepalive_tasks_to_execute:
+                    def run_keepalive(site_name_inner, site_config_inner):
+                        try:
+                            result = cookie_keepalive.keepalive_task(site_config_inner, config)
+                            
+                            with keepalive_queue_lock:
+                                if site_name_inner in keepalive_tasks:
+                                    keepalive_tasks[site_name_inner]['next_exec_time'] = result['next_exec_time']
+                                    keepalive_tasks[site_name_inner]['last_check'] = datetime.now()
+                            
+                            if result['success']:
+                                print(f"  ✅ {site_name_inner} Cookie 保活成功")
+                            else:
+                                print(f"  ❌ {site_name_inner} Cookie 保活失败（{result['message']}）")
+                        except Exception as e:
+                            print(f"  ❌ {site_name_inner}: {e}")
+                    
+                    t = threading.Thread(
+                        target=run_keepalive,
+                        args=(site_name, site_config),
+                        daemon=True
+                    )
+                    t.start()
+                    keepalive_threads.append(t)
+                    time.sleep(0.3)
+                
+                for t in keepalive_threads:
+                    t.join(timeout=120)
+                
+                print(f"[{now.strftime('%H:%M:%S')}] Cookie 保活任务执行完成\n")
             
             # 检查是否有任务需要执行
             with tasks_lock:

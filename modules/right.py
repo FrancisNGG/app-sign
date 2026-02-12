@@ -2,9 +2,11 @@
 """
 恩山无线论坛签到模块 - 使用 Cookie 方式
 依赖CookieCloud同步浏览器Cookie（包含5秒盾验证Cookie）
+Cookie保活由 modules/cookie_keepalive.py 独立管理
 """
 import requests
 import re
+import time
 from urllib.parse import urljoin
 
 

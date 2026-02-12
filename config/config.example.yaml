@@ -17,27 +17,86 @@ cookiecloud:
 
 # 签到站点列表
 sites:
-  # 示例：恩山论坛（使用Cookie）
+  # ========== 恩山无线论坛（使用Cookie） ==========
+  # 需要配置：cookie（通过CookieCloud同步）
+  # 登录地址：https://www.right.com.cn/forum/
+  # 获取Cookie：使用浏览器或CookieCloud扩展抓取
   - name: "恩山无线论坛"
     base_url: "https://www.right.com.cn/forum/"
-    cookie: ""               # 在这里粘贴Cookie
-    run_time: "09:00:00"     # 签到时间
-    random_range: 0          # 随机控制（分钟，可选）
+    cookie: ""                 # 在这里粘贴Cookie（多个用;分隔）
+    run_time: "09:00:00"       # 签到时间
+    random_range: 0            # 随机延迟（分钟，可选）
 
-  # 示例：什么值得买（使用Cookie）
+  # ========== 什么值得买（使用Cookie） ==========
+  # 需要配置：cookie
+  # 登录地址：https://www.smzdm.com/
   - name: "什么值得买"
     base_url: "https://www.smzdm.com/"
-    cookie: ""
+    cookie: ""                 # Cookie（多个用;分隔）
     run_time: "10:00:00"
     random_range: 0
 
-  # 示例：远景论坛（使用账号密码）
+  # ========== 远景论坛（使用账号密码） ==========
+  # 需要配置：username、password
+  # 支持账号名或邮箱登录
   - name: "远景论坛"
     base_url: "https://bbs.pcbeta.com/"
-    username: ""             # 用户名
-    password: ""             # 密码
+    username: ""               # 用户名或邮箱
+    password: ""               # 密码
     run_time: "11:00:00"
     random_range: 0
+
+  # ========== 有道云笔记（使用Cookie） ==========
+  # 需要配置：cookie
+  # 登录地址：https://note.youdao.com/
+  - name: "有道云笔记"
+    base_url: "https://note.youdao.com/"
+    cookie: ""                 # Cookie（需包含YNOTE_CSTK参数）
+    run_time: "12:00:00"
+    random_range: 0
+
+  # ========== 百度贴吧（使用Cookie） ==========
+  # 需要配置：cookie
+  # 登录地址：https://tieba.baidu.com/
+  # 功能：自动签到所有关注的贴吧
+  - name: "百度贴吧"
+    base_url: "https://tieba.baidu.com/"
+    cookie: ""                 # Cookie（需要BDUSS等参数）
+    run_time: "13:00:00"
+    random_range: 0
+
+  # ========== AcFun（使用Cookie） ==========
+  # 需要配置：cookie
+  # 登录地址：https://www.acfun.cn/
+  # 功能：签到获取香蕉、金香蕉、AC币等奖励
+  - name: "AcFun"
+    base_url: "https://www.acfun.cn/"
+    cookie: ""                 # Cookie
+    run_time: "14:00:00"
+    random_range: 0
+
+  # ========== 哔哩哔哩（使用Cookie） ==========
+  # 需要配置：cookie
+  # 登录地址：https://www.bilibili.com/
+  # 功能：分享视频、观看视频、漫画签到等
+  - name: "哔哩哔哩"
+    base_url: "https://www.bilibili.com/"
+    cookie: ""                 # Cookie（包含SESSDATA等）
+    run_time: "15:00:00"
+    random_range: 0
+
+  # ========== 华米运动（使用账号密码） 存在问题不可用 ==========
+  # 需要配置：username（手机号）、password 
+  # 功能：刷步数，可自定义步数范围
+  # 单位：步数，默认10000~20000
+#  - name: "华米运动"
+#    base_url: "https://www.huami.com/"
+#    username: ""               # 手机号（+86区码）
+#    password: ""               # 密码
+#    min_step: 10000            # 最小步数（可选，默认10000）
+#    max_step: 20000            # 最大步数（可选，默认20000）
+#    run_time: "16:00:00"
+#    random_range: 0
 
 # 通知配置（可选）
 # 支持多种推送方式，配置为列表形式

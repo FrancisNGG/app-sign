@@ -2,13 +2,21 @@ version: '3.8'
 
 services:
   sign-app:
-    image: python:3.9-slim
+    build: .
+    image: app-sign:latest
     container_name: app-sign
+    
+    # 代码和配置挂载
     volumes:
       - /volume1/docker/app-sign:/app
+      - /volume1/docker/app-sign/logs:/app/logs
+      - /volume1/docker/app-sign/config:/app/config
+    
     working_dir: /app
+    
     environment:
       - TZ=Asia/Shanghai
-    command: >
-      sh -c "pip install requests pyyaml cryptography && python -u run_sign.py"
+      - PYTHONUNBUFFERED=1
+    
     restart: always
+    
