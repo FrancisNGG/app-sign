@@ -2,6 +2,7 @@
 """
 统一签到脚本 - 主入口
 支持多个论坛/网站的自动签到
+包含错误重试机制
 """
 import yaml
 import time
@@ -15,6 +16,9 @@ from modules import right, pcbeta, smzdm, youdao, tieba, acfun, bilibili, sync_c
 daily_tasks = []
 tasks_lock = threading.Lock()
 last_schedule_date = None
+# 重试任务队列
+retry_queue = []
+retry_queue_lock = threading.Lock()
 
 
 def load_config():
@@ -124,6 +128,9 @@ def process_site(site, config):
     Args:
         site: 站点配置
         config: 全局配置
+        
+    Returns:
+        bool: 签到是否成功
     """
     name = site.get('name', '未知站点')
     
@@ -132,14 +139,99 @@ def process_site(site, config):
     
     if not module:
         print(f"[{name}] 跳过：无法识别站点类型或配置不完整")
-        return
+        return False
     
     # 执行签到
     try:
-        module.sign_in(site, config, push_notification)
+        result = module.sign_in(site, config, push_notification)
+        return result if result is not None else False
     except Exception as e:
         print(f"[{name}] 执行失败: {e}")
         push_notification(config, name, f"执行失败: {str(e)}")
+        return False
+
+
+def get_retry_config(config):
+    """
+    获取重试配置
+    
+    Args:
+        config: 全局配置
+        
+    Returns:
+        dict: 重试配置（enabled, max_retries, retry_delay_hours）
+    """
+    retry_config = config.get('retry', {})
+    return {
+        'enabled': retry_config.get('enabled', True),
+        'max_retries': retry_config.get('max_retries', 3),
+        'retry_delay_hours': retry_config.get('retry_delay_hours', 1)
+    }
+
+
+def should_retry(task, config):
+    """
+    判断任务是否应该重试
+    
+    Args:
+        task: 任务字典
+        config: 全局配置
+        
+    Returns:
+        bool: 是否应该重试
+    """
+    retry_config = get_retry_config(config)
+    if not retry_config['enabled']:
+        return False
+    
+    retry_count = task.get('retry_count', 0)
+    max_retries = retry_config['max_retries']
+    
+    return retry_count < max_retries
+
+
+def add_retry_task(task, config):
+    """
+    将失败的任务添加到重试队列
+    
+    Args:
+        task: 失败的任务
+        config: 全局配置
+    """
+    retry_config = get_retry_config(config)
+    if not retry_config['enabled']:
+        return
+    
+    # 复制任务并增加重试计数
+    retry_task = dict(task)
+    retry_task['retry_count'] = task.get('retry_count', 0) + 1
+    retry_task['executed'] = False  # 重置执行标记
+    
+    # 计算重试时间（当前时间 +延迟）
+    now = datetime.now()
+    retry_time = now + timedelta(hours=retry_config['retry_delay_hours'])
+    retry_task['scheduled_time'] = retry_time.strftime('%H:%M:%S')
+    retry_task['original_time'] = task.get('scheduled_time', 'unknown')
+    
+    # 加入重试队列
+    with retry_queue_lock:
+        retry_queue.append(retry_task)
+    
+    retry_count = retry_task['retry_count']
+    name = task['site'].get('name', '未知站点')
+    retry_delay = retry_config['retry_delay_hours']
+    
+    print(f"\n{'='*60}")
+    print(f"[重试] {name}")
+    print(f"原始时间: {retry_task['original_time']}")
+    print(f"重试次数: {retry_count}/{retry_config['max_retries']}")
+    print(f"延迟时间: {retry_delay} 小时")
+    print(f"预定重试时间: {retry_task['scheduled_time']}")
+    print(f"{'='*60}\n")
+    
+    # 通知重试信息
+    retry_msg = f"签到失败，已加入重试队列（第{retry_count}次重试，延迟{retry_delay}小时）"
+    push_notification(config, name, retry_msg)
 
 
 def generate_daily_tasks(config):
@@ -153,7 +245,7 @@ def generate_daily_tasks(config):
         config: 配置字典
         
     Returns:
-        任务列表，每个任务包含 site、scheduled_time、executed 字段
+        任务列表，每个任务包含 site、scheduled_time、executed、retry_count 字段
     """
     sites = config.get('sites', [])
     tasks = []
@@ -197,7 +289,8 @@ def generate_daily_tasks(config):
             tasks.append({
                 'site': site,
                 'scheduled_time': scheduled_time,
-                'executed': False
+                'executed': False,
+                'retry_count': 0  # 新增重试计数
             })
             
             # 输出任务信息
@@ -240,18 +333,42 @@ def execute_task(task, config):
     site = task['site']
     name = site.get('name', '未知站点')
     scheduled_time = task['scheduled_time']
+    retry_count = task.get('retry_count', 0)
+    
+    # 构建标题信息
+    if retry_count > 0:
+        title = f"[重试 {retry_count}] {name}"
+    else:
+        title = name
     
     print(f"\n{'='*60}")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 执行任务")
-    print(f"站点: {name}")
+    print(f"站点: {title}")
     print(f"预定时间: {scheduled_time}")
     print(f"{'='*60}")
     
-    process_site(site, config)
+    # 执行签到
+    success = process_site(site, config)
     
-    print(f"{'='*60}")
-    print(f"任务完成: {name}")
-    print(f"{'='*60}\n")
+    # 处理失败的情况
+    if not success and should_retry(task, config):
+        add_retry_task(task, config)
+    elif not success:
+        # 重试次数已达上限
+        retry_config = get_retry_config(config)
+        max_retries = retry_config['max_retries']
+        print(f"\n{'='*60}")
+        print(f"[任务失败] {name}")
+        print(f"已达到最大重试次数（{max_retries}），停止重试")
+        print(f"{'='*60}\n")
+        
+        final_msg = f"签到失败，已达到最大重试次数（{max_retries}），请手动检查"
+        push_notification(config, name, final_msg)
+    else:
+        # 签到成功
+        print(f"{'='*60}")
+        print(f"任务完成: {name}")
+        print(f"{'='*60}\n")
 
 
 def check_and_regenerate_tasks(config):
@@ -289,6 +406,7 @@ def main():
     3. 主循环每秒检查是否有任务需要执行
     4. 使用线程执行任务，避免阻塞
     5. 已执行的任务不会重复执行
+    6. 失败任务自动加入重试队列，在配置的延迟时间后重试
     """
     print(f"\n{'='*60}")
     print(f"自动签到服务启动")
@@ -300,6 +418,13 @@ def main():
     if not config:
         print("[错误] 无法加载配置文件")
         return
+    
+    # 显示重试配置
+    retry_config = get_retry_config(config)
+    print(f"[配置] 错误重试机制")
+    print(f"  启用状态: {'是' if retry_config['enabled'] else '否'}")
+    print(f"  最大重试次数: {retry_config['max_retries']}")
+    print(f"  重试延迟: {retry_config['retry_delay_hours']} 小时\n")
     
     # 首次启动时尝试同步 Cookie
     cookiecloud_enabled = False
@@ -371,13 +496,23 @@ def main():
                     if task['scheduled_time'] == current_time and not task['executed']
                 ]
             
+            # 检查是否有重试任务需要执行
+            with retry_queue_lock:
+                retry_tasks_to_execute = [
+                    task for task in retry_queue 
+                    if task['scheduled_time'] == current_time and not task['executed']
+                ]
+            
+            # 合并所有需要执行的任务
+            all_tasks_to_execute = tasks_to_execute + retry_tasks_to_execute
+            
             # 执行到达时间的任务
-            if tasks_to_execute:
-                print(f"\n[{now.strftime('%H:%M:%S')}] 检测到 {len(tasks_to_execute)} 个任务到达执行时间")
+            if all_tasks_to_execute:
+                print(f"\n[{now.strftime('%H:%M:%S')}] 检测到 {len(all_tasks_to_execute)} 个任务到达执行时间")
                 
                 # 如果多个任务时间相同，使用线程并行执行
                 threads = []
-                for task in tasks_to_execute:
+                for task in all_tasks_to_execute:
                     t = threading.Thread(
                         target=execute_task, 
                         args=(task, config),
@@ -387,7 +522,7 @@ def main():
                     threads.append(t)
                     
                     # 如果任务时间不同但在同一秒内，添加小延迟避免请求过于集中
-                    if len(tasks_to_execute) > 1:
+                    if len(all_tasks_to_execute) > 1:
                         time.sleep(0.5)
                 
                 # 等待所有任务完成

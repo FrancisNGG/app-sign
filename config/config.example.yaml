@@ -1,0 +1,45 @@
+# 自动签到配置文件示例
+# 编辑 config.yaml 配置实际信息
+
+# 重试机制配置
+retry:
+  enabled: true              # 是否启用重试机制，默认开启
+  max_retries: 3             # 最大重试次数，默认3次
+  retry_delay_hours: 1       # 重试延迟时间（小时），默认1小时
+
+# CookieCloud 配置（可选）
+# 用于从浏览器自动同步 Cookie
+cookiecloud:
+  server: ""                 # CookieCloud 服务器地址，如 http://127.0.0.1:8888
+  uuid: ""                   # UUID
+  password: ""               # 密码
+  sync_time: 60              # 同步间隔（分钟），默认每60分钟同步一次
+
+# 签到站点列表
+sites:
+  # 示例：恩山论坛（使用Cookie）
+  - name: "恩山无线论坛"
+    base_url: "https://www.right.com.cn/forum/"
+    cookie: ""               # 在这里粘贴Cookie
+    run_time: "09:00:00"     # 签到时间
+    random_range: 0          # 随机控制（分钟，可选）
+
+  # 示例：什么值得买（使用Cookie）
+  - name: "什么值得买"
+    base_url: "https://www.smzdm.com/"
+    cookie: ""
+    run_time: "10:00:00"
+    random_range: 0
+
+  # 示例：远景论坛（使用账号密码）
+  - name: "远景论坛"
+    base_url: "https://bbs.pcbeta.com/"
+    username: ""             # 用户名
+    password: ""             # 密码
+    run_time: "11:00:00"
+    random_range: 0
+
+# 通知配置（可选）
+notify:
+  # 企业微信
+  weixin_robot_key: ""       # 企业微信 WebHook Key，用于发送通知
