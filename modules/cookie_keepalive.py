@@ -112,6 +112,9 @@ def refresh_cookie_with_playwright(site, config):
     """
     使用Playwright刷新Cookie
     
+    策略：使用现有的有效Cookie进行访问
+    这样就不会触发反爬，浏览器会直接获得更新的Cookie
+    
     Args:
         site: 站点配置
         config: 全局配置
@@ -124,46 +127,91 @@ def refresh_cookie_with_playwright(site, config):
         }
     """
     try:
-        # 检查test_playwright_cookie_refresh.py是否存在
-        playwright_script = os.path.join(project_root, 'test_playwright_cookie_refresh.py')
-        if not os.path.exists(playwright_script):
-            return {
-                'success': False,
-                'cookie_raw': None,
-                'message': 'Playwright脚本不存在'
-            }
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {
+            'success': False,
+            'cookie_raw': None,
+            'message': 'Playwright未安装'
+        }
+    
+    name = site.get('name', '恩山无线论坛')
+    url = site.get('base_url', 'https://www.right.com.cn/forum/')
+    old_cookie_str = site.get('cookie', '')
+    
+    if not old_cookie_str:
+        return {
+            'success': False,
+            'cookie_raw': None,
+            'message': f'{name} 缺少Cookie配置'
+        }
+    
+    try:
+        # 解析现有Cookie
+        old_cookies = parse_cookie_string(old_cookie_str)
         
-        # 动态导入test_playwright_cookie_refresh
-        spec = __import__('importlib.util').util.spec_from_file_location(
-            "test_playwright_cookie_refresh", 
-            playwright_script
-        )
-        module = __import__('importlib.util').util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        # 转换为Playwright格式
+        cookie_list = []
+        for name_key, value in old_cookies.items():
+            cookie_list.append({
+                'name': name_key,
+                'value': value,
+                'domain': '.right.com.cn',
+                'path': '/'
+            })
         
-        # 调用refresh_cookie_with_playwright函数
-        result = module.refresh_cookie_with_playwright(site)
-        
-        # 检查返回值是否有效
-        if not result or not isinstance(result, dict):
-            return {
-                'success': False,
-                'cookie_raw': None,
-                'message': f'Playwright返回无效结果: {type(result).__name__}'
-            }
-        
-        if result.get('success'):
-            return {
-                'success': True,
-                'cookie_raw': result.get('new_cookie'),
-                'message': f"刷新成功"
-            }
-        else:
-            return {
-                'success': False,
-                'cookie_raw': None,
-                'message': result.get('message', '刷新失败')
-            }
+        # 启动Playwright浏览器
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context()
+            
+            # 注入现有Cookie
+            context.add_cookies(cookie_list)
+            
+            # 创建页面并访问论坛
+            page = context.new_page()
+            response = page.goto(url, wait_until='networkidle', timeout=60000)
+            
+            # 等待页面加载完成
+            page.wait_for_load_state('networkidle', timeout=5000)
+            
+            # 让JavaScript执行完成
+            try:
+                page.evaluate('''
+                    new Promise(resolve => {
+                        let waitCount = 0;
+                        const waitInterval = setInterval(() => {
+                            waitCount++;
+                            if (waitCount > 5) {
+                                clearInterval(waitInterval);
+                                resolve(true);
+                            }
+                        }, 100);
+                    });
+                ''')
+            except:
+                pass
+            
+            # 提取新Cookie
+            new_cookies = context.cookies()
+            new_cookie_str = '; '.join([f'{c["name"]}={c["value"]}' for c in new_cookies])
+            
+            # 关闭浏览器
+            context.close()
+            browser.close()
+            
+            if new_cookie_str:
+                return {
+                    'success': True,
+                    'cookie_raw': new_cookie_str,
+                    'message': '刷新成功'
+                }
+            else:
+                return {
+                    'success': False,
+                    'cookie_raw': None,
+                    'message': 'Cookie提取失败'
+                }
     
     except Exception as e:
         return {
@@ -189,10 +237,10 @@ def sync_with_cookiecloud(site, config):
         }
     """
     try:
-        from . import sync_cookies
+        from . import cookie_sync
         from . import cookie_metadata
         
-        if not sync_cookies.sync_cookies():
+        if not cookie_sync.sync_cookies():
             return {
                 'success': False,
                 'message': 'CookieCloud同步失败',
@@ -201,7 +249,7 @@ def sync_with_cookiecloud(site, config):
         
         # 重新加载配置以获取最新Cookie
         # load_config() 返回 (config_dict, encoding) 元组
-        result = sync_cookies.load_config()
+        result = cookie_sync.load_config()
         if result and result[0]:
             new_config = result[0]
             site_name = site.get('name')
@@ -414,11 +462,11 @@ def keepalive_task(site, config):
             
             # 保存新Cookie到config
             try:
-                from . import sync_cookies
+                from . import cookie_sync
                 from . import cookie_metadata
                 
                 # 重新加载config
-                config_result = sync_cookies.load_config()
+                config_result = cookie_sync.load_config()
                 if config_result and config_result[0]:
                     saved_config, encoding = config_result
                     # 更新site的cookie和metadata
@@ -430,7 +478,7 @@ def keepalive_task(site, config):
                             s['cookie_metadata'] = metadata.to_dict()
                             break
                     # 保存回文件
-                    sync_cookies.save_config(saved_config, encoding=encoding)
+                    cookie_sync.save_config(saved_config, encoding=encoding)
                     print(f"  已保存到config（包括元数据）")
                     steps.append("新Cookie已保存（含元数据）")
                 else:
@@ -486,9 +534,9 @@ def keepalive_task(site, config):
                 
                 # 保存同步后的Cookie和元数据到config
                 try:
-                    from . import sync_cookies as sc
+                    from . import cookie_sync as cs
                     
-                    config_result = sc.load_config()
+                    config_result = cs.load_config()
                     if config_result and config_result[0]:
                         saved_config, encoding = config_result
                         for s in saved_config.get('sites', []):
@@ -496,7 +544,7 @@ def keepalive_task(site, config):
                                 s['cookie'] = cookie_raw
                                 # Cookie 来源已被标记为 cookiecloud（在 sync_with_cookiecloud 中）
                                 break
-                        sc.save_config(saved_config, encoding=encoding)
+                        cs.save_config(saved_config, encoding=encoding)
                         print(f"  已保存到config")
                 except Exception as e:
                     print(f"  保存出错: {e}")

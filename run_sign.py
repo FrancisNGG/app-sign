@@ -6,6 +6,12 @@
 Cookie保活由独立的 cookie_keepalive 模块管理
 """
 import sys
+import io
+
+# 确保 stdout 和 stderr 使用 UTF-8 编码
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 import argparse
 import yaml
 import time
@@ -13,7 +19,7 @@ import random
 import threading
 from datetime import datetime, timedelta
 from modules.notify import push_notification
-from modules import right, pcbeta, smzdm, youdao, tieba, acfun, bilibili, sync_cookies, cookie_keepalive, cookie_metadata
+from modules import right, pcbeta, smzdm, youdao, tieba, acfun, bilibili, cookie_sync, cookie_keepalive, cookie_metadata
 import os
 import logging
 
@@ -34,8 +40,8 @@ keepalive_tasks = {}  # {site_name: {'next_exec_time': datetime, 'site': site}}
 def setup_logging():
     """
     初始化日志系统
-    - 同时输出到 stdout 和日志文件
-    - 日志文件以启动时间命名（精确到秒）
+    - 同时输出到文件和 stdout
+    - print() 和 logging 都会被保存
     """
     logs_dir = "logs"
     if not os.path.exists(logs_dir):
@@ -51,54 +57,49 @@ def setup_logging():
     
     # 创建 logger
     logger = logging.getLogger()
-    # 清除已有的处理器（防止重复添加）
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
     
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
     
     # 文件处理器
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setLevel(logging.INFO)
+    file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(logging.Formatter(log_format, datefmt=date_format))
     
-    # 控制台处理器（输出到 stdout，用于 docker 容器显示）
+    # 控制台处理器
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(logging.Formatter(log_format, datefmt=date_format))
     
-    # 添加处理器
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
     
-    # 重定向 stdout 和 stderr，让 print() 也输出到日志文件
-    class DualOutput:
-        def __init__(self, log_file_path, original_stdout, original_stderr):
-            self.terminal_out = original_stdout
-            self.terminal_err = original_stderr
-            self.log_file = open(log_file_path, 'a', encoding='utf-8')
-            self.is_stderr = False
+    # Tee 类：同时写入日志文件和 stdout
+    class TeeOutput:
+        def __init__(self, name, original_stream, log_file_path):
+            self.name = name
+            self.terminal = original_stream
+            self.log_file = open(log_file_path, 'a', encoding='utf-8', buffering=1)
         
         def write(self, message):
-            # 同时写入控制台和日志文件
-            self.terminal_out.write(message)
+            self.terminal.write(message)
+            self.terminal.flush()
             self.log_file.write(message)
             self.log_file.flush()
         
         def flush(self):
-            self.terminal_out.flush()
+            self.terminal.flush()
             self.log_file.flush()
         
         def isatty(self):
-            return False
+            return self.terminal.isatty()
     
-    # 保存原始的 stdout/stderr
-    original_stdout = sys.stdout if not isinstance(sys.stdout, DualOutput) else sys.stdout.terminal_out
-    original_stderr = sys.stderr if not isinstance(sys.stderr, DualOutput) else sys.stderr.terminal_out
-    
-    # 重定向输出
-    sys.stdout = DualOutput(log_file, original_stdout, original_stderr)
-    sys.stderr = DualOutput(log_file, original_stdout, original_stderr)
+    # 重定向 stdout 和 stderr
+    if not isinstance(sys.stdout, TeeOutput):
+        sys.stdout = TeeOutput('stdout', sys.__stdout__, log_file)
+    if not isinstance(sys.stderr, TeeOutput):
+        sys.stderr = TeeOutput('stderr', sys.__stderr__, log_file)
     
     logging.info(f"日志系统初始化完成，日志文件: {log_file}")
     return log_file
@@ -622,7 +623,7 @@ def sync_all_cookies(config):
     print("🔄 手动同步 Cookie")
     print(f"{'='*80}\n")
     
-    if not sync_cookies.sync_cookies():
+    if not cookie_sync.sync_cookies():
         print("❌ 同步失败")
         return False
     

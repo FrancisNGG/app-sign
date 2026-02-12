@@ -1,5 +1,9 @@
 # App Sign - 自动签到服务
 
+<p align="center">
+  <img src="image/app_sign_logo.png" alt="App Sign Logo" width="120" />
+</p>
+
 自动访问多个网站进行日常签到，简化重复的手动操作。基于 Docker 容器化部署，支持 DSM 7.2 环境。
 
 ## ✨ 功能特性
@@ -93,6 +97,9 @@ docker-compose down
 .
 ├── config/
 │   └── config.yaml          # 配置文件（Cookie 等）
+├── image/                    # Logo 和其他图片资源
+│   ├── app_sign_logo.ico  
+│   └── app_sign_logo.png
 ├── modules/
 │   ├── right.py             # 恩山论坛签到
 │   ├── smzdm.py             # 什么值得买签到
@@ -102,6 +109,7 @@ docker-compose down
 ├── run_sign.py              # 主程序
 ├── Dockerfile               # 容器镜像定义
 ├── docker-compose.yaml      # 容器编排配置
+├── README.md                # 说明文档
 └── requirements.txt         # Python 依赖
 ```
 
@@ -165,6 +173,10 @@ A: 仅对恩山论坛执行，其他网站直接调用各自的签到 API。
 ```bash
 cat logs/sign_20260212_120530.log
 ```
+
+## 📖 免责声明
+
+本项目代码全部由 AI 驱动完成，本人并未参与任何代码编写。本人不承担任何使用上的责任。如有侵权联系删除。
 
 ## 📄 License
 

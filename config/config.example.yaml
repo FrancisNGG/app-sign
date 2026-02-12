@@ -8,12 +8,11 @@ retry:
   retry_delay_hours: 1       # 重试延迟时间（小时），默认1小时
 
 # CookieCloud 配置（可选）
-# 用于从浏览器自动同步 Cookie
+# 用于从浏览器自动同步 Cookie（仅用于故障恢复，不启用自动同步）
 cookiecloud:
   server: ""                 # CookieCloud 服务器地址，如 http://127.0.0.1:8888
   uuid: ""                   # UUID
   password: ""               # 密码
-  sync_time: 60              # 同步间隔（分钟），默认每60分钟同步一次
 
 # 签到站点列表
 sites:
@@ -25,7 +24,7 @@ sites:
     base_url: "https://www.right.com.cn/forum/"
     cookie: ""                 # 在这里粘贴Cookie（多个用;分隔）
     run_time: "09:00:00"       # 签到时间
-    random_range: 0            # 随机延迟（分钟，可选）
+    random_range: 10            # 随机延迟（分钟，可选）
 
   # ========== 什么值得买（使用Cookie） ==========
   # 需要配置：cookie
@@ -33,8 +32,8 @@ sites:
   - name: "什么值得买"
     base_url: "https://www.smzdm.com/"
     cookie: ""                 # Cookie（多个用;分隔）
-    run_time: "10:00:00"
-    random_range: 0
+    run_time: "09:00:00"
+    random_range: 10
 
   # ========== 远景论坛（使用账号密码） ==========
   # 需要配置：username、password
@@ -43,8 +42,8 @@ sites:
     base_url: "https://bbs.pcbeta.com/"
     username: ""               # 用户名或邮箱
     password: ""               # 密码
-    run_time: "11:00:00"
-    random_range: 0
+    run_time: "09:00:00"
+    random_range: 10
 
   # ========== 有道云笔记（使用Cookie） ==========
   # 需要配置：cookie
@@ -52,8 +51,8 @@ sites:
   - name: "有道云笔记"
     base_url: "https://note.youdao.com/"
     cookie: ""                 # Cookie（需包含YNOTE_CSTK参数）
-    run_time: "12:00:00"
-    random_range: 0
+    run_time: "09:00:00"
+    random_range: 10
 
   # ========== 百度贴吧（使用Cookie） ==========
   # 需要配置：cookie
@@ -62,8 +61,8 @@ sites:
   - name: "百度贴吧"
     base_url: "https://tieba.baidu.com/"
     cookie: ""                 # Cookie（需要BDUSS等参数）
-    run_time: "13:00:00"
-    random_range: 0
+    run_time: "09:00:00"
+    random_range: 10
 
   # ========== AcFun（使用Cookie） ==========
   # 需要配置：cookie
@@ -72,8 +71,8 @@ sites:
   - name: "AcFun"
     base_url: "https://www.acfun.cn/"
     cookie: ""                 # Cookie
-    run_time: "14:00:00"
-    random_range: 0
+    run_time: "09:00:00"
+    random_range: 10
 
   # ========== 哔哩哔哩（使用Cookie） ==========
   # 需要配置：cookie
@@ -82,8 +81,8 @@ sites:
   - name: "哔哩哔哩"
     base_url: "https://www.bilibili.com/"
     cookie: ""                 # Cookie（包含SESSDATA等）
-    run_time: "15:00:00"
-    random_range: 0
+    run_time: "09:00:00"
+    random_range: 10
 
   # ========== 华米运动（使用账号密码） 存在问题不可用 ==========
   # 需要配置：username（手机号）、password 
@@ -96,7 +95,7 @@ sites:
 #    min_step: 10000            # 最小步数（可选，默认10000）
 #    max_step: 20000            # 最大步数（可选，默认20000）
 #    run_time: "16:00:00"
-#    random_range: 0
+#    random_range: 10
 
 # 通知配置（可选）
 # 支持多种推送方式，配置为列表形式

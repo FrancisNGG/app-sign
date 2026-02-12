@@ -11,7 +11,7 @@
 import sys
 import yaml
 from datetime import datetime
-from modules.sync_cookies import (
+from modules.cookie_sync import (
     load_config, 
     save_config, 
     get_cookies_from_cloud, 

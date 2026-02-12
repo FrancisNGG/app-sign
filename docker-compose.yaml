@@ -20,3 +20,5 @@ services:
     
     restart: always
     
+    # 使用 host 网络模式（DSM 环境中可访问外网）
+    network_mode: "host"

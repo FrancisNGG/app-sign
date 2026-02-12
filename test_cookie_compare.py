@@ -5,7 +5,7 @@ CookieCloud Cookie 对比工具
 对比从 CookieCloud 获取的原始 Cookie 和配置文件中的 Cookie
 """
 import yaml
-from modules.sync_cookies import load_config, get_cookies_from_cloud, format_cookies_for_domain, DOMAIN_MAPPING
+from modules.cookie_sync import load_config, get_cookies_from_cloud, format_cookies_for_domain, DOMAIN_MAPPING
 
 
 def main():

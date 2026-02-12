@@ -65,7 +65,7 @@ def test_configuration():
     print("测试 2: 配置系统")
     print("=" * 80)
     
-    from modules.sync_cookies import load_config
+    from modules.cookie_sync import load_config
     
     print("\n【测试 2.1】加载配置文件")
     config_result = load_config()
@@ -112,8 +112,8 @@ def test_imports():
         from modules import cookie_keepalive
         print("✅ cookie_keepalive 模块")
         
-        from modules import sync_cookies
-        print("✅ sync_cookies 模块")
+        from modules import cookie_sync
+        print("✅ cookie_sync 模块")
         
         from modules import right
         print("✅ right 模块")
@@ -125,7 +125,7 @@ def test_imports():
         assert hasattr(cookie_keepalive, 'keepalive_task'), "缺少 keepalive_task 函数"
         print("✅ keepalive_task 函数存在")
         
-        assert hasattr(sync_cookies, 'sync_cookies'), "缺少 sync_cookies 函数"
+        assert hasattr(cookie_sync, 'sync_cookies'), "缺少 sync_cookies 函数"
         print("✅ sync_cookies 函数存在")
         
         print("\n✅ 模块导入测试通过\n")
