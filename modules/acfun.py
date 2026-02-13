@@ -56,7 +56,7 @@ def sign_in(site, config, notify_func):
         result_msg = "签到失败: 缺少Cookie"
         print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
-        return
+        return False
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
@@ -79,7 +79,7 @@ def sign_in(site, config, notify_func):
             result_msg = "签到失败: 无法访问个人中心，Cookie可能已过期"
             print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
-            return
+            return False
         
         # 2. 调用签到接口
         print(f"[{name}] 执行签到...")
@@ -90,7 +90,7 @@ def sign_in(site, config, notify_func):
             result_msg = f"签到失败: HTTP {signin_resp.status_code}"
             print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
-            return
+            return False
         
         # 3. 解析签到结果
         try:
@@ -136,12 +136,15 @@ def sign_in(site, config, notify_func):
             print(f"[{name}] 响应内容: {signin_resp.text[:200]}")
         
         notify_func(config, name, result_msg)
+        return "失败" not in result_msg
         
     except requests.RequestException as e:
         result_msg = f"签到失败: 网络请求异常 - {e}"
         print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
+        return False
     except Exception as e:
         result_msg = f"签到失败: {e}"
         print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
+        return False

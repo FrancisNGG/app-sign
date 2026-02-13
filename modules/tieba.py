@@ -31,7 +31,7 @@ def sign_in(site, config, notify_func):
         result_msg = "签到失败: 缺少Cookie"
         print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
-        return
+        return False
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -54,7 +54,7 @@ def sign_in(site, config, notify_func):
             result_msg = "签到失败: Cookie无效或已过期"
             print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
-            return
+            return False
         
         # 2. 获取关注的贴吧列表
         print(f"[{name}] 获取关注的贴吧列表...")
@@ -68,7 +68,7 @@ def sign_in(site, config, notify_func):
             result_msg = "签到失败: 无法获取贴吧列表"
             print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
-            return
+            return False
         
         # 提取总页数
         total_pages_match = re.search(r'&pn=([^"]+)">尾页</a>', first_resp.text)
@@ -96,7 +96,7 @@ def sign_in(site, config, notify_func):
             result_msg = "签到失败: 未找到关注的贴吧"
             print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
-            return
+            return False
         
         # 3. 对每个贴吧进行签到
         signed = []  # 签到成功的贴吧
@@ -181,12 +181,16 @@ def sign_in(site, config, notify_func):
         
         print(f"[{name}] 签到完成: 成功{len(signed)} 已签{len(already_signed)} 失败{len(failed)}")
         notify_func(config, name, result_msg)
+        # 只要有成功或已签的贴吧，就认为本次签到成功
+        return len(signed) > 0 or len(already_signed) > 0
         
     except requests.RequestException as e:
         result_msg = f"签到失败: 网络请求异常 - {e}"
         print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
+        return False
     except Exception as e:
         result_msg = f"签到失败: {e}"
         print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
+        return False

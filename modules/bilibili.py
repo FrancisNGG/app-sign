@@ -30,7 +30,7 @@ def sign_in(site, config, notify_func):
         result_msg = "签到失败: 缺少Cookie"
         print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
-        return
+        return False
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -54,7 +54,7 @@ def sign_in(site, config, notify_func):
             result_msg = "签到失败: Cookie中缺少bili_jct参数"
             print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
-            return
+            return False
         
         bili_jct = bili_jct_match.group(1)
         print(f"[{name}] 获取bili_jct成功")
@@ -201,16 +201,22 @@ def sign_in(site, config, notify_func):
         
         result_msg = "\n".join(msg_parts)
         
+        # 检查是否有成功的任务
+        has_success = any("✓" in result for result in task_results) if task_results else False
+        
         print(f"[{name}] 签到完成")
         notify_func(config, name, result_msg)
+        return has_success
         
     except requests.RequestException as e:
         result_msg = f"签到失败: 网络请求异常 - {e}"
         print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
+        return False
     except Exception as e:
         result_msg = f"签到失败: {e}"
         print(f"[{name}] {result_msg}")
         import traceback
         traceback.print_exc()
         notify_func(config, name, result_msg)
+        return False

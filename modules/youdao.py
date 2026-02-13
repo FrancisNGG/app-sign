@@ -29,7 +29,7 @@ def sign_in(site, config, notify_func):
         result_msg = "签到失败: 缺少Cookie"
         print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
-        return
+        return False
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -50,7 +50,7 @@ def sign_in(site, config, notify_func):
             result_msg = "签到失败: 无法提取CSTK参数"
             print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
-            return
+            return False
         
         cstk = cstk_match.group(1)
         print(f"[{name}] CSTK: {cstk}")
@@ -127,12 +127,15 @@ def sign_in(site, config, notify_func):
         
         print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
+        return True
         
     except requests.RequestException as e:
         result_msg = f"签到失败: 网络请求异常 - {e}"
         print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
+        return False
     except Exception as e:
         result_msg = f"签到失败: {e}"
         print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
+        return False

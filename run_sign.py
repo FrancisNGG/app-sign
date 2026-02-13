@@ -414,7 +414,18 @@ def execute_task(task, config):
             return
         task['executed'] = True
     
-    site = task['site']
+    # 从最新的config中查询该site的最新配置（确保使用最新的Cookie）
+    site_name = task['site'].get('name', '未知站点')
+    site = None
+    for s in config.get('sites', []):
+        if s.get('name') == site_name:
+            site = s
+            break
+    
+    if not site:
+        # 如果在新config中找不到，则使用task中的旧site
+        site = task['site']
+    
     name = site.get('name', '未知站点')
     scheduled_time = task['scheduled_time']
     retry_count = task.get('retry_count', 0)
