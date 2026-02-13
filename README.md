@@ -79,8 +79,14 @@ retry:
 # 安装依赖
 pip install -r requirements.txt
 
-# 启动签到服务
+# 启动签到服务（监听模式，自动定时签到）
 python run_sign.py
+
+# 手动签到单个站点（支持模糊匹配站点名称）
+python run_sign.py --single smzdm      # 签到什么值得买
+python run_sign.py --single 恩山        # 签到恩山论坛
+python run_sign.py --single bilibili   # 签到哔哩哔哩
+python run_sign.py --single 有道云      # 签到有道云笔记
 
 # 检查 Cookie 状态
 python run_sign.py --check-cookie
@@ -98,9 +104,56 @@ docker-compose up -d --build
 # 查看实时日志
 docker logs -f app-sign
 
+# 手动签到单个站点
+docker exec app-sign python run_sign.py --single smzdm
+
 # 停止服务
 docker-compose down
 ```
+
+## 🎯 命令行选项
+
+### 主要参数说明
+
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `--single SITE_NAME` | **🆕 手动签到单个站点**，支持完整名称、别名和简称（如 smzdm、bilibili、恩山、有道等） | `python run_sign.py --single smzdm` |
+| `--check-cookie` | 检查所有配置站点的 Cookie 有效性 | `python run_sign.py --check-cookie` |
+| `--sync-cookies` | 从 CookieCloud 服务器同步最新 Cookie | `python run_sign.py --sync-cookies` |
+| （无参数） | **默认行为**：启动监听模式，自动定时签到 | `python run_sign.py` |
+
+### --single 参数使用示例
+
+```bash
+# 使用完整站点名称
+python run_sign.py --single "什么值得买"
+python run_sign.py --single "恩山无线论坛"
+python run_sign.py --single "哔哩哔哩"
+
+# 使用别名或简称（推荐）
+python run_sign.py --single smzdm       # 什么值得买
+python run_sign.py --single 恩山        # 恩山无线论坛
+python run_sign.py --single bilibili   # 哔哩哔哩
+python run_sign.py --single 贴吧        # 百度贴吧
+python run_sign.py --single 有道云      # 有道云笔记
+python run_sign.py --single acfun      # AcFun
+python run_sign.py --single pcbeta     # 远景论坛
+python run_sign.py --single 恩山        # 恩山无线论坛（中文别名）
+python run_sign.py --single right      # 恩山无线论坛（英文别名）
+python run_sign.py --single b站        # 哔哩哔哩
+
+# Docker 环境下手动签到
+docker exec app-sign python run_sign.py --single smzdm
+```
+
+### --single 参数说明
+
+- **灵活匹配**：支持完整名称、中文别名、英文简称或关键字
+- **不区分大小写**：支持大写、小写或混合输入（如 SMZDM、SmZdm 均可）
+- **模糊匹配**：即使输入了站点名称的部分内容也能识别
+- **实时执行**：立即执行签到，无需等待定时任务
+- **独立运行**：不受日程安排和重试机制影响
+- **输出提示**：清晰显示签到成功/失败状态及可用站点列表
 
 ## 📂 项目结构
 
@@ -131,8 +184,7 @@ docker-compose down
 ├── docker-compose.yaml      # 容器编排配置
 ├── requirements.txt         # Python 依赖
 ├── README.md                # 说明文档
-└── .gitignore               # Git 忽略规则
-```
+├── .gitignore               # Git 忽略规则
 │   ├── app_sign_logo.ico  
 │   └── app_sign_logo.png
 ├── modules/

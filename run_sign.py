@@ -714,6 +714,98 @@ def sync_all_cookies(config):
     return True
 
 
+def sign_in_single_site(site_name, config):
+    """
+    手动签到单个站点
+    
+    Args:
+        site_name: 站点名称或别名/关键词
+        config: 配置字典
+    """
+    sites = config.get('sites', [])
+    site_name_lower = site_name.lower()
+    
+    # 按优先级收集匹配结果
+    exact_match = None  # 精确匹配站点名称
+    fuzzy_name_matches = []  # 模糊匹配站点名称
+    exact_alias_match = None  # 精确匹配别名
+    fuzzy_alias_matches = []  # 模糊匹配别名
+    
+    for site in sites:
+        # 精确匹配站点名称
+        if site_name_lower == site.get('name', '').lower():
+            exact_match = site
+            break
+        
+        # 模糊匹配站点名称
+        if site_name_lower in site.get('name', '').lower():
+            fuzzy_name_matches.append(site)
+            continue
+        
+        # 匹配别名（精确）
+        aliases = site.get('aliases', [])
+        if site_name_lower in [alias.lower() for alias in aliases]:
+            exact_alias_match = site
+            break
+        
+        # 匹配别名（模糊）
+        if any(site_name_lower in alias.lower() for alias in aliases):
+            fuzzy_alias_matches.append(site)
+    
+    # 优先级：精确匹配站点名 > 精确匹配别名 > 模糊匹配（名称/别名）
+    if exact_match:
+        target_site = exact_match
+    elif exact_alias_match:
+        target_site = exact_alias_match
+    elif len(fuzzy_name_matches) == 1:
+        target_site = fuzzy_name_matches[0]
+    elif len(fuzzy_alias_matches) == 1:
+        target_site = fuzzy_alias_matches[0]
+    elif len(fuzzy_name_matches) > 1 or len(fuzzy_alias_matches) > 1:
+        # 歧义匹配：多个站点同时符合
+        all_matches = fuzzy_name_matches + fuzzy_alias_matches
+        print(f"\n⚠️  搜索词过宽泛，匹配到多个站点:")
+        for idx, site in enumerate(all_matches, 1):
+            aliases_str = " / ".join(site.get('aliases', []))
+            if aliases_str:
+                print(f"  {idx}. {site.get('name')} ({aliases_str})")
+            else:
+                print(f"  {idx}. {site.get('name')}")
+        print(f"\n💡 请使用完整名称或更具体的别名来指定站点:")
+        print(f"   python3 run_sign.py --single {all_matches[0].get('aliases', [''])[0] if all_matches[0].get('aliases') else all_matches[0].get('name')}")
+        return False
+    else:
+        # 未找到匹配
+        target_site = None
+    
+    if not target_site:
+        print(f"\n❌ 未找到站点: {site_name}")
+        print(f"\n📋 可用的站点及别名:")
+        for site in sites:
+            aliases_str = " / ".join(site.get('aliases', []))
+            if aliases_str:
+                print(f"  - {site.get('name')} ({aliases_str})")
+            else:
+                print(f"  - {site.get('name')}")
+        return False
+    
+    print(f"\n{'='*60}")
+    print(f"🧪 手动签到: {target_site.get('name')}")
+    print(f"{'='*60}\n")
+    
+    # 执行签到
+    success = process_site(target_site, config)
+    
+    print(f"\n{'='*60}")
+    if success:
+        print(f"✅ 签到成功: {target_site.get('name')}")
+    else:
+        print(f"❌ 签到失败: {target_site.get('name')}")
+    print(f"{'='*60}\n")
+    
+    return success
+
+
 def main():
     """
     主函数 - 基于任务表的定时签到调度器
@@ -738,12 +830,15 @@ def main():
   python3 run_sign.py              # 正常运行，开始定时签到
   python3 run_sign.py --check-cookie   # 检查所有网站的 Cookie 状态
   python3 run_sign.py --sync-cookies   # 手动同步一次 Cookie
+  python3 run_sign.py --single smzdm   # 手动签到单个站点（支持模糊匹配）
         '''
     )
     parser.add_argument('--check-cookie', action='store_true',
                        help='检查所有网站的 Cookie 状态并显示有效期')
     parser.add_argument('--sync-cookies', action='store_true',
                        help='手动同步一次 CookieCloud')
+    parser.add_argument('--single', type=str, metavar='SITE_NAME',
+                       help='手动签到单个站点（输入站点名称或关键词，如 smzdm、恩山、bilibili）')
     
     args = parser.parse_args()
     
@@ -761,6 +856,11 @@ def main():
     # 处理 --sync-cookies 参数
     if args.sync_cookies:
         sync_all_cookies(config)
+        return
+    
+    # 处理 --single 参数
+    if args.single:
+        sign_in_single_site(args.single, config)
         return
     
     print(f"\n{'='*60}")

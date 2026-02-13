@@ -21,6 +21,7 @@ sites:
   # 登录地址：https://www.right.com.cn/forum/
   # 获取Cookie：使用浏览器或CookieCloud扩展抓取
   - name: "恩山无线论坛"
+    aliases: ["恩山", "right"]   # 支持的别名或简称
     base_url: "https://www.right.com.cn/forum/"
     cookie: ""                 # 在这里粘贴Cookie（多个用;分隔）
     run_time: "09:00:00"       # 签到时间
@@ -30,6 +31,7 @@ sites:
   # 需要配置：cookie
   # 登录地址：https://www.smzdm.com/
   - name: "什么值得买"
+    aliases: ["smzdm", "值得买"]   # 支持的别名或简称
     base_url: "https://www.smzdm.com/"
     cookie: ""                 # Cookie（多个用;分隔）
     run_time: "09:00:00"
@@ -39,6 +41,7 @@ sites:
   # 需要配置：username、password
   # 支持账号名或邮箱登录
   - name: "远景论坛"
+    aliases: ["pcbeta", "远景"]   # 支持的别名或简称
     base_url: "https://bbs.pcbeta.com/"
     username: ""               # 用户名或邮箱
     password: ""               # 密码
@@ -49,6 +52,7 @@ sites:
   # 需要配置：cookie
   # 登录地址：https://note.youdao.com/
   - name: "有道云笔记"
+    aliases: ["有道云", "youdao"]   # 支持的别名或简称
     base_url: "https://note.youdao.com/"
     cookie: ""                 # Cookie（需包含YNOTE_CSTK参数）
     run_time: "09:00:00"
@@ -59,6 +63,7 @@ sites:
   # 登录地址：https://tieba.baidu.com/
   # 功能：自动签到所有关注的贴吧
   - name: "百度贴吧"
+    aliases: ["贴吧", "tieba"]   # 支持的别名或简称
     base_url: "https://tieba.baidu.com/"
     cookie: ""                 # Cookie（需要BDUSS等参数）
     run_time: "09:00:00"
@@ -69,6 +74,7 @@ sites:
   # 登录地址：https://www.acfun.cn/
   # 功能：签到获取香蕉、金香蕉、AC币等奖励
   - name: "AcFun"
+    aliases: ["acfun", "A站"]   # 支持的别名或简称
     base_url: "https://www.acfun.cn/"
     cookie: ""                 # Cookie
     run_time: "09:00:00"
@@ -79,6 +85,7 @@ sites:
   # 登录地址：https://www.bilibili.com/
   # 功能：分享视频、观看视频、漫画签到等
   - name: "哔哩哔哩"
+    aliases: ["bilibili", "b站", "bili"]   # 支持的别名或简称
     base_url: "https://www.bilibili.com/"
     cookie: ""                 # Cookie（包含SESSDATA等）
     run_time: "09:00:00"
