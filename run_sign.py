@@ -37,19 +37,49 @@ keepalive_queue_lock = threading.Lock()
 keepalive_tasks = {}  # {site_name: {'next_exec_time': datetime, 'site': site}}
 
 
+def cleanup_old_logs(logs_dir, days=7):
+    """
+    清理指定天数前的日志文件
+    
+    Args:
+        logs_dir: 日志目录
+        days: 保留天数（默认7天）
+    """
+    try:
+        now_timestamp = time.time()
+        cutoff_timestamp = now_timestamp - (days * 86400)  # days * 24 * 60 * 60
+        
+        for filename in os.listdir(logs_dir):
+            if filename.startswith('sign_') and filename.endswith('.log'):
+                file_path = os.path.join(logs_dir, filename)
+                file_mtime = os.path.getmtime(file_path)
+                
+                # 如果文件修改时间早于cutoff时间，删除
+                if file_mtime < cutoff_timestamp:
+                    try:
+                        os.remove(file_path)
+                        logging.info(f"已删除过期日志: {filename}")
+                    except Exception as e:
+                        logging.warning(f"删除日志失败 {filename}: {e}")
+    except Exception as e:
+        logging.warning(f"清理日志目录失败: {e}")
+
+
 def setup_logging():
     """
-    初始化日志系统
+    初始化日志系统 - 按天轮转
+    - 每天0点自动创建新日志文件
+    - 自动删除7天前的日志
     - 同时输出到文件和 stdout
-    - print() 和 logging 都会被保存
     """
     logs_dir = "logs"
     if not os.path.exists(logs_dir):
         os.makedirs(logs_dir, exist_ok=True)
     
-    # 生成日志文件名（启动时间精确到秒）
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(logs_dir, f"sign_{timestamp}.log")
+    # 生成日志文件名（按日期格式，便于辨识和管理）
+    # 格式: sign_YYYYMMDD.log
+    current_date = datetime.now().strftime("%Y%m%d")
+    log_file = os.path.join(logs_dir, f"sign_{current_date}.log")
     
     # 配置日志格式
     log_format = "%(asctime)s [%(levelname)s] %(message)s"
@@ -62,7 +92,7 @@ def setup_logging():
     
     logger.setLevel(logging.DEBUG)
     
-    # 文件处理器
+    # 文件处理器（使用普通 FileHandler，配合外部日期更新逻辑）
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(logging.Formatter(log_format, datefmt=date_format))
@@ -77,12 +107,37 @@ def setup_logging():
     
     # Tee 类：同时写入日志文件和 stdout
     class TeeOutput:
-        def __init__(self, name, original_stream, log_file_path):
+        def __init__(self, name, original_stream, log_file_path, logs_directory):
             self.name = name
             self.terminal = original_stream
+            self.log_file_path = log_file_path
+            self.logs_directory = logs_directory
             self.log_file = open(log_file_path, 'a', encoding='utf-8', buffering=1)
+            self.current_date = datetime.now().strftime("%Y%m%d")
+        
+        def _check_date_change(self):
+            """检查日期是否变更，如果变更则切换日志文件"""
+            new_date = datetime.now().strftime("%Y%m%d")
+            if new_date != self.current_date:
+                self.current_date = new_date
+                
+                # 关闭旧日志文件
+                self.log_file.close()
+                
+                # 打开新日志文件
+                self.log_file_path = os.path.join(self.logs_directory, f"sign_{new_date}.log")
+                self.log_file = open(self.log_file_path, 'a', encoding='utf-8', buffering=1)
+                
+                # 清理7天前的日志
+                cleanup_old_logs(self.logs_directory, days=7)
+                
+                # 记录日志滚转信息
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.log_file.write(f"{timestamp} [INFO] 日志文件已切换至新日期\n")
+                self.log_file.flush()
         
         def write(self, message):
+            self._check_date_change()
             self.terminal.write(message)
             self.terminal.flush()
             self.log_file.write(message)
@@ -97,9 +152,12 @@ def setup_logging():
     
     # 重定向 stdout 和 stderr
     if not isinstance(sys.stdout, TeeOutput):
-        sys.stdout = TeeOutput('stdout', sys.__stdout__, log_file)
+        sys.stdout = TeeOutput('stdout', sys.__stdout__, log_file, logs_dir)
     if not isinstance(sys.stderr, TeeOutput):
-        sys.stderr = TeeOutput('stderr', sys.__stderr__, log_file)
+        sys.stderr = TeeOutput('stderr', sys.__stderr__, log_file, logs_dir)
+    
+    # 启动时清理一次过期日志
+    cleanup_old_logs(logs_dir, days=7)
     
     logging.info(f"日志系统初始化完成，日志文件: {log_file}")
     return log_file
