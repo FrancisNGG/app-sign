@@ -122,7 +122,10 @@ def setup_logging():
                 self.current_date = new_date
                 
                 # 关闭旧日志文件
-                self.log_file.close()
+                try:
+                    self.log_file.close()
+                except Exception as e:
+                    logging.warning(f"关闭旧日志文件失败: {e}")
                 
                 # 打开新日志文件
                 self.log_file_path = os.path.join(self.logs_directory, f"sign_{new_date}.log")
@@ -138,6 +141,17 @@ def setup_logging():
         
         def write(self, message):
             self._check_date_change()
+            # 检查日志文件是否存在，如果被删除则重新打开
+            if not os.path.exists(self.log_file_path):
+                try:
+                    self.log_file.close()
+                except:
+                    pass
+                self.log_file = open(self.log_file_path, 'a', encoding='utf-8', buffering=1)
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.log_file.write(f"{timestamp} [WARNING] 日志文件已重新创建（原文件被删除）\n")
+                self.log_file.flush()
+            
             self.terminal.write(message)
             self.terminal.flush()
             self.log_file.write(message)
