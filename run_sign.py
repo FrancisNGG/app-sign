@@ -906,7 +906,9 @@ def main():
     
     print(f"开始监控任务执行...\n")
     
+    last_config_load_time = None
     last_check_second = None
+    config = load_config()  # 初始加载配置
     
     while True:
         try:
@@ -914,20 +916,28 @@ def main():
             now = datetime.now()
             current_time = now.strftime('%H:%M:%S')
             current_date = now.strftime('%Y-%m-%d')
+            now_timestamp = now.timestamp()
             
-            # 避免同一秒内重复检查
+            # 跳过重复秒的高频检查（秒级精度，但避免重复）
             if current_time == last_check_second:
-                time.sleep(0.3)
+                time.sleep(0.05)  # 轻量级轮询，只检查时间
                 continue
             
             last_check_second = current_time
             
-            # 重新加载配置（以便支持动态修改配置）
-            config = load_config()
-            if not config:
-                print(f"[{now.strftime('%H:%M:%S')}] 警告: 配置文件加载失败")
-                time.sleep(5)
-                continue
+            # 每5秒重新加载一次配置（支持动态修改，但避免频繁I/O）
+            if last_config_load_time is None or (now_timestamp - last_config_load_time) >= 5:
+                config = load_config()
+                if not config:
+                    print(f"[{now.strftime('%H:%M:%S')}] 警告: 配置文件加载失败")
+                    time.sleep(5)
+                    continue
+                last_config_load_time = now_timestamp
+            else:
+                if not config:
+                    print(f"[{now.strftime('%H:%M:%S')}] 警告: 配置文件加载失败")
+                    time.sleep(5)
+                    continue
             
             # 检查是否需要重新生成任务表（每天0点）
             if check_and_regenerate_tasks(config):
@@ -1013,8 +1023,8 @@ def main():
                 
                 print(f"[{now.strftime('%H:%M:%S')}] 本轮任务执行完成\n")
             
-            # 每秒检查一次
-            time.sleep(0.5)
+            # 精确检查（只在秒数变化时执行重检查，其他时间轻量级轮询）
+            time.sleep(0.1)
             
         except KeyboardInterrupt:
             print(f"\n{'='*60}")
