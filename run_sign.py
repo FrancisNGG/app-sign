@@ -949,7 +949,7 @@ def main():
             if keepalive_tasks_to_execute:
                 print(f"\n[{now.strftime('%H:%M:%S')}] 检测到 {len(keepalive_tasks_to_execute)} 个 Cookie 保活任务需要执行")
                 
-                keepalive_threads = []
+                # 在后台线程中执行保活任务，不阻塞主循环
                 for site_name, site_config in keepalive_tasks_to_execute:
                     def run_keepalive(site_name_inner, site_config_inner):
                         try:
@@ -973,13 +973,9 @@ def main():
                         daemon=True
                     )
                     t.start()
-                    keepalive_threads.append(t)
                     time.sleep(0.3)
                 
-                for t in keepalive_threads:
-                    t.join(timeout=120)
-                
-                print(f"[{now.strftime('%H:%M:%S')}] Cookie 保活任务执行完成\n")
+                print(f"[{now.strftime('%H:%M:%S')}] Cookie 保活任务已提交（后台运行）\n")
             
             # 检查是否有任务需要执行
             with tasks_lock:
@@ -1002,8 +998,8 @@ def main():
             if all_tasks_to_execute:
                 print(f"\n[{now.strftime('%H:%M:%S')}] 检测到 {len(all_tasks_to_execute)} 个任务到达执行时间")
                 
-                # 如果多个任务时间相同，使用线程并行执行
-                threads = []
+                # 使用后台线程执行，不阻塞主循环
+                # 这样可以保证主循环继续检查是否有新任务到达
                 for task in all_tasks_to_execute:
                     t = threading.Thread(
                         target=execute_task, 
@@ -1011,17 +1007,12 @@ def main():
                         daemon=True
                     )
                     t.start()
-                    threads.append(t)
                     
-                    # 如果任务时间不同但在同一秒内，添加小延迟避免请求过于集中
+                    # 不同任务的启动间隔（避免请求过于集中）
                     if len(all_tasks_to_execute) > 1:
-                        time.sleep(0.5)
+                        time.sleep(0.3)
                 
-                # 等待所有任务完成
-                for t in threads:
-                    t.join()
-                
-                print(f"[{now.strftime('%H:%M:%S')}] 本轮任务执行完成\n")
+                print(f"[{now.strftime('%H:%M:%S')}] 任务已提交执行（后台运行）\n")
             
             # 精确检查（只在秒数变化时执行重检查，其他时间轻量级轮询）
             time.sleep(0.1)
