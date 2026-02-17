@@ -4,6 +4,7 @@
 """
 import requests
 import time
+from . import safe_print
 
 
 def sign_in(site, config, notify_func):
@@ -19,7 +20,7 @@ def sign_in(site, config, notify_func):
     cookie_raw = site.get('cookie', '')
     
     if not cookie_raw:
-        print(f"[{name}] 缺少 Cookie 配置")
+        safe_print(f"[{name}] 缺少 Cookie 配置")
         notify_func(config, name, "配置错误：缺少Cookie")
         return False
     
@@ -37,7 +38,7 @@ def sign_in(site, config, notify_func):
             "Content-Type": "application/x-www-form-urlencoded"
         }
         
-        print(f"[{name}] 开始签到...")
+        safe_print(f"[{name}] 开始签到...")
         
         # 签到接口
         checkin_url = "https://api.smzdm.com/v1/user/checkin"
@@ -92,29 +93,29 @@ def sign_in(site, config, notify_func):
                         smzdm_id = data.get('smzdm_id', '')
                         return f"连续签到天数: {checkin_days}", smzdm_id
                 except Exception as e:
-                    print(f"[{name}] DEBUG - 获取用户信息失败: {e}")
+                    safe_print(f"[{name}] DEBUG - 获取用户信息失败: {e}")
                 return None, None
             
             if error_code == '0':
                 # 签到成功
                 sign_info, smzdm_id = get_user_info()
                 if sign_info:
-                    print(f"[{name}] ✓ 签到成功")
-                    print(f"[{name}] {sign_info}")
+                    safe_print(f"[{name}] ✓ 签到成功")
+                    safe_print(f"[{name}] {sign_info}")
                     notify_func(config, name, f"签到成功\n{sign_info}")
                 else:
-                    print(f"[{name}] ✓ 签到成功")
+                    safe_print(f"[{name}] ✓ 签到成功")
                     notify_func(config, name, "签到成功")
                 return True
             elif '11111' in error_code:
                 # Cookie 失效
-                print(f"[{name}] Cookie 已失效，请更新")
+                safe_print(f"[{name}] Cookie 已失效，请更新")
                 notify_func(config, name, "Cookie已失效")
                 return False
             else:
                 # 其他情况，可能已签到
                 msg = result.get('error_msg', '未知状态')
-                print(f"[{name}] 签到响应: {msg}")
+                safe_print(f"[{name}] 签到响应: {msg}")
                 
                 # 尝试获取签到信息
                 sign_info, smzdm_id = get_user_info()
@@ -122,7 +123,7 @@ def sign_in(site, config, notify_func):
                 # 如果包含"已经"等关键词，视为已签到
                 if any(x in msg for x in ["已", "完成", "重复"]):
                     if sign_info:
-                        print(f"[{name}] {sign_info}")
+                        safe_print(f"[{name}] {sign_info}")
                         notify_func(config, name, f"今日已签到\n{sign_info}")
                     else:
                         notify_func(config, name, "今日已签到")
@@ -134,12 +135,12 @@ def sign_in(site, config, notify_func):
                 return True
                 
         except Exception as e:
-            print(f"[{name}] 解析响应失败: {e}")
-            print(f"[{name}] 响应内容: {res.text[:200]}")
+            safe_print(f"[{name}] 解析响应失败: {e}")
+            safe_print(f"[{name}] 响应内容: {res.text[:200]}")
             notify_func(config, name, "签到完成（响应异常）")
             return False
             
     except Exception as e:
-        print(f"[{name}] ✗ 运行出错: {e}")
+        safe_print(f"[{name}] ✗ 运行出错: {e}")
         notify_func(config, name, f"签到失败: {str(e)}")
         return False

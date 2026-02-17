@@ -3,7 +3,9 @@
 通知推送模块 - 支持多种推送服务（Bark、Telegram、企业微信等）
 """
 import requests
+import time
 from datetime import datetime
+from . import safe_print
 
 
 def push_bark(bark_config, site_name, result_msg):
@@ -41,12 +43,25 @@ def push_bark(bark_config, site_name, result_msg):
     if url_param:
         payload['url'] = url_param
     
-    try:
-        url = f"https://api.day.app/{api_key}"
-        requests.post(url, json=payload, timeout=10)
-        print(f"[通知] 已发送 Bark 推送: {site_name} - {result_msg}")
-    except Exception as e:
-        print(f"[通知] Bark 推送失败: {e}")
+    url = f"https://api.day.app/{api_key}"
+
+    # 失败重试：最多2次（总计3次）
+    max_retries = int(bark_config.get('max_retries', 2))
+    retry_delay = float(bark_config.get('retry_delay_seconds', 1.0))
+
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.post(url, json=payload, timeout=10)
+            if response.status_code == 200:
+                safe_print(f"[通知] 已发送 Bark 推送: {site_name} - {result_msg}")
+                return
+
+            raise requests.RequestException(f"HTTP {response.status_code}: {response.text[:120]}")
+        except Exception as e:
+            if attempt < max_retries:
+                time.sleep(retry_delay)
+                continue
+            safe_print(f"[通知] Bark 推送失败: {e}")
 
 
 def push_notification(config, site_name, result_msg):

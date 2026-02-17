@@ -34,6 +34,28 @@ def parse_cookie_string(cookie_raw):
     return cookies
 
 
+def has_right_auth_cookie(cookie_dict):
+    """判断是否包含恩山登录态关键cookie（*_auth）"""
+    if not isinstance(cookie_dict, dict):
+        return False
+    for key, value in cookie_dict.items():
+        if str(key).lower().endswith('_auth') and str(value).strip():
+            return True
+    return False
+
+
+def page_indicates_logged_out(html_text):
+    """判断页面内容是否显示未登录状态"""
+    if not html_text:
+        return True
+    text = str(html_text).lower()
+    keywords = [
+        '请先登录', '先登录', '未登录', '登录后',
+        'member.php?mod=logging', 'action=login', '登录'
+    ]
+    return any(keyword in text for keyword in keywords)
+
+
 def extract_cookie_timestamps(cookie_dict):
     """
     从Cookie中提取所有时间戳
@@ -200,7 +222,10 @@ def refresh_cookie_with_playwright(site, config):
             context.close()
             browser.close()
             
-            if new_cookie_str:
+            new_cookie_dict = parse_cookie_string(new_cookie_str)
+
+            # 关键校验：必须拿到登录态cookie，否则即使能打开页面也不算成功
+            if new_cookie_str and has_right_auth_cookie(new_cookie_dict):
                 return {
                     'success': True,
                     'cookie_raw': new_cookie_str,
@@ -210,7 +235,7 @@ def refresh_cookie_with_playwright(site, config):
                 return {
                     'success': False,
                     'cookie_raw': None,
-                    'message': 'Cookie提取失败'
+                    'message': 'Playwright未获取到登录态Cookie（缺少_auth）'
                 }
     
     except Exception as e:
@@ -314,6 +339,7 @@ def verify_cookie_validity(site, config):
     """
     try:
         import requests
+        from . import get_user_agent
         
         base_url = site.get('base_url', 'https://www.right.com.cn/forum/')
         cookie_raw = site.get('cookie', '')
@@ -327,24 +353,32 @@ def verify_cookie_validity(site, config):
         
         # 解析Cookie
         cookies = parse_cookie_string(cookie_raw)
+
+        # 先检查是否包含登录态cookie
+        if not has_right_auth_cookie(cookies):
+            return {
+                'valid': False,
+                'status_code': 0,
+                'message': '缺少登录态Cookie（*_auth）'
+            }
         
         # 创建会话
         session = requests.Session()
         session.cookies.update(cookies)
         session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': get_user_agent(config)
         })
         
         # 访问论坛首页
         response = session.get(base_url, timeout=15, allow_redirects=True)
         
-        # HTTP 200 表示有效，其他表示失效
-        valid = (response.status_code == 200)
+        # HTTP 200 且页面不是未登录状态才算有效
+        valid = (response.status_code == 200 and not page_indicates_logged_out(response.text))
         
         return {
             'valid': valid,
             'status_code': response.status_code,
-            'message': f'HTTP {response.status_code}'
+            'message': f'HTTP {response.status_code}' if valid else '页面显示未登录'
         }
     
     except Exception as e:
@@ -368,8 +402,9 @@ def calculate_next_refresh_time(cookie_dict):
     analysis = analyze_cookie_validity(cookie_dict)
     
     if not analysis['valid']:
-        # Cookie已过期，立即刷新
-        return datetime.datetime.now()
+        # Cookie已过期，2秒后再尝试（避免无限循环执行）
+        # 如果Playwright刷新成功，会更新为正确的有效期时间
+        return datetime.datetime.now() + datetime.timedelta(seconds=2)
     
     # Cookie有效期结束时间 + 2分钟
     expires_timestamp = analysis['max_timestamp']

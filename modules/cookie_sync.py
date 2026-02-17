@@ -9,6 +9,9 @@ import requests
 import hashlib
 import base64
 import re
+import os
+import tempfile
+import threading
 from datetime import datetime
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
@@ -21,6 +24,8 @@ except ImportError:
     import yaml
     HAS_RUAMEL = False
 
+# 全局锁：保护config文件的读-修改-写操作，防止并发问题
+_config_write_lock = threading.Lock()
 
 # 站点域名映射
 DOMAIN_MAPPING = {
@@ -38,32 +43,35 @@ def load_config(config_path='config/config.yaml'):
     """
     加载配置文件，同时保留原有格式信息
     
+    使用全局锁保护读操作，防止读取正在被写入的文件
+    
     Args:
         config_path: 配置文件路径
         
     Returns:
         (config_dict, encoding): 配置字典和文件编码
     """
-    if HAS_RUAMEL:
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                yaml_obj = YAML()
-                yaml_obj.preserve_quotes = True
-                yaml_obj.default_flow_style = False
-                config = yaml_obj.load(f)
-                return config, 'utf-8'
-        except Exception as e:
-            print(f"⚠️  ruamel.yaml 加载失败: {e}，使用标准yaml")
-    
-    # 备用方案：使用标准 PyYAML
-    for enc in ['utf-8', 'gbk']:
-        try:
-            with open(config_path, 'r', encoding=enc) as f:
-                config = yaml.safe_load(f)
-                return config, enc
-        except:
-            continue
-    return None, None
+    with _config_write_lock:
+        if HAS_RUAMEL:
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    yaml_obj = YAML()
+                    yaml_obj.preserve_quotes = True
+                    yaml_obj.default_flow_style = False
+                    config = yaml_obj.load(f)
+                    return config, 'utf-8'
+            except Exception as e:
+                print(f"⚠️  ruamel.yaml 加载失败: {e}，使用标准yaml")
+        
+        # 备用方案：使用标准 PyYAML
+        for enc in ['utf-8', 'gbk']:
+            try:
+                with open(config_path, 'r', encoding=enc) as f:
+                    config = yaml.safe_load(f)
+                    return config, enc
+            except:
+                continue
+        return None, None
 
 
 def save_config(config, config_path='config/config.yaml', encoding='utf-8'):
@@ -71,56 +79,79 @@ def save_config(config, config_path='config/config.yaml', encoding='utf-8'):
     保存配置文件，采用最简单的行级替换来保留YAML格式
     只更新cookie值所在的行，保留所有其他内容不变
     
+    使用全局锁保护读-修改-写操作，使用临时文件+原子重命名确保文件完整性
+    
     Args:
         config: 配置字典
         config_path: 配置文件路径
         encoding: 文件编码
     """
-    try:
-        # 读取原始文件的所有行
-        with open(config_path, 'r', encoding=encoding) as f:
-            lines = f.readlines()
-        
-        sites = config.get('sites', [])
-        
-        # 构建一个字典：站点名 -> cookie值
-        cookie_map = {site.get('name'): site.get('cookie', '') for site in sites if site.get('name')}
-        
-        new_lines = []
-        current_site_name = None
-        
-        for line in lines:
-            stripped = line.lstrip()
+    with _config_write_lock:
+        try:
+            # 读取原始文件的所有行
+            with open(config_path, 'r', encoding=encoding) as f:
+                lines = f.readlines()
             
-            # 检测到站点名称（- name:）
-            if stripped.startswith('- name:'):
-                # 提取站点名称
-                match = re.search(r'- name:\s*["\']?([^"\'\n]+)["\']?', line)
-                if match:
-                    current_site_name = match.group(1).strip()
+            sites = config.get('sites', [])
             
-            # 检测cookie行
-            elif stripped.startswith('cookie:') and current_site_name in cookie_map:
-                # 获取要设置的新cookie值
-                new_cookie = cookie_map[current_site_name]
-                # 提取原行的缩进
-                indent = line[:len(line) - len(stripped)]
-                # 构建新的cookie行，简单地替换值，保留缩进和换行
-                new_line = f'{indent}cookie: "{new_cookie}"\n'
-                new_lines.append(new_line)
-                continue
+            # 构建一个字典：站点名 -> cookie值
+            cookie_map = {site.get('name'): site.get('cookie', '') for site in sites if site.get('name')}
             
-            # 所有其他行保持不变
-            new_lines.append(line)
-        
-        # 写回文件
-        with open(config_path, 'w', encoding=encoding) as f:
-            f.writelines(new_lines)
+            new_lines = []
+            current_site_name = None
             
-    except Exception as e:
-        print(f"❌ 保存配置失败: {e}")
-        import traceback
-        traceback.print_exc()
+            for line in lines:
+                stripped = line.lstrip()
+                
+                # 检测到站点名称（- name:）
+                if stripped.startswith('- name:'):
+                    # 提取站点名称
+                    match = re.search(r'- name:\s*["\']?([^"\'\n]+)["\']?', line)
+                    if match:
+                        current_site_name = match.group(1).strip()
+                
+                # 检测cookie行
+                elif stripped.startswith('cookie:') and current_site_name in cookie_map:
+                    # 获取要设置的新cookie值
+                    new_cookie = cookie_map[current_site_name]
+                    # 提取原行的缩进
+                    indent = line[:len(line) - len(stripped)]
+                    # 构建新的cookie行，简单地替换值，保留缩进和换行
+                    new_line = f'{indent}cookie: "{new_cookie}"\n'
+                    new_lines.append(new_line)
+                    continue
+                
+                # 所有其他行保持不变
+                new_lines.append(line)
+            
+            # 使用临时文件+原子重命名的方式写入，确保文件不会被损坏
+            # 获取配置文件的目录
+            config_dir = os.path.dirname(config_path) or '.'
+            
+            # 在同一目录下创建临时文件（确保同一文件系统，便于原子重命名）
+            temp_fd, temp_path = tempfile.mkstemp(dir=config_dir, text=True, suffix='.tmp')
+            try:
+                with os.fdopen(temp_fd, 'w', encoding=encoding) as temp_file:
+                    temp_file.writelines(new_lines)
+                
+                # 原子重命名（在大多数操作系统上是原子的）
+                # 在Windows上需要先删除目标文件
+                if os.path.exists(config_path):
+                    os.replace(temp_path, config_path)
+                else:
+                    os.rename(temp_path, config_path)
+            except Exception as write_error:
+                # 清理临时文件
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+                raise write_error
+            
+        except Exception as e:
+            print(f"❌ 保存配置失败: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 def decrypt_cookie_data(encrypted_data, uuid, password):

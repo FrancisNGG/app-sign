@@ -7,6 +7,7 @@ import time
 import random
 import requests
 from urllib.parse import quote
+from . import safe_print, get_user_agent
 
 
 def sign_in(site, config, notify_func):
@@ -29,12 +30,12 @@ def sign_in(site, config, notify_func):
     
     if not cookie:
         result_msg = "签到失败: 缺少Cookie"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return False
     
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'User-Agent': get_user_agent(config),
         'Cookie': cookie,
         'Accept': '*/*',
         'Accept-Language': 'zh-CN,zh;q=0.9',
@@ -46,18 +47,18 @@ def sign_in(site, config, notify_func):
     
     try:
         # 1. 验证Cookie有效性
-        print(f"[{name}] 验证Cookie...")
+        safe_print(f"[{name}] 验证Cookie...")
         check_url = 'https://tieba.baidu.com/f/user/json_userinfo'
         check_resp = session.get(check_url, timeout=10)
         
         if check_resp.status_code != 200 or 'session_id' not in check_resp.text:
             result_msg = "签到失败: Cookie无效或已过期"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
             return False
         
         # 2. 获取关注的贴吧列表
-        print(f"[{name}] 获取关注的贴吧列表...")
+        safe_print(f"[{name}] 获取关注的贴吧列表...")
         all_bars = []
         
         # 获取第一页以确定总页数
@@ -66,14 +67,14 @@ def sign_in(site, config, notify_func):
         
         if first_resp.status_code != 200:
             result_msg = "签到失败: 无法获取贴吧列表"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
             return False
         
         # 提取总页数
         total_pages_match = re.search(r'&pn=([^"]+)">尾页</a>', first_resp.text)
         total_pages = int(total_pages_match.group(1)) if total_pages_match else 1
-        print(f"[{name}] 共{total_pages}页贴吧")
+        safe_print(f"[{name}] 共{total_pages}页贴吧")
         
         # 遍历所有页面获取贴吧列表
         for page in range(1, total_pages + 1):
@@ -84,17 +85,17 @@ def sign_in(site, config, notify_func):
                 # 提取当前页所有贴吧名称
                 bars = re.findall(r'href="/f\?kw=[^"]+"\s+title="([^"]+)"', page_resp.text)
                 all_bars.extend(bars)
-                print(f"[{name}] 第{page}页: 找到{len(bars)}个贴吧")
+                safe_print(f"[{name}] 第{page}页: 找到{len(bars)}个贴吧")
             
             # 翻页延迟
             if page < total_pages:
                 time.sleep(random.uniform(0.5, 1.5))
         
-        print(f"[{name}] 共找到{len(all_bars)}个贴吧")
+        safe_print(f"[{name}] 共找到{len(all_bars)}个贴吧")
         
         if not all_bars:
             result_msg = "签到失败: 未找到关注的贴吧"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
             return False
         
@@ -124,7 +125,7 @@ def sign_in(site, config, notify_func):
                     if result.get('error') == '':
                         forum_name = result.get('data', {}).get('forum_info', {}).get('forum_name', bar)
                         signed.append(forum_name)
-                        print(f"[{name}] ✓ {forum_name}")
+                        safe_print(f"[{name}] ✓ {forum_name}")
                     
                     # 已经签到过
                     elif 'error' in result:
@@ -132,20 +133,20 @@ def sign_in(site, config, notify_func):
                         # 匹配"亲，你之前已经签过了"等消息
                         if '已经签' in error_msg or '已签' in error_msg:
                             already_signed.append(bar)
-                            print(f"[{name}] - {bar} (已签)")
+                            safe_print(f"[{name}] - {bar} (已签)")
                         else:
                             failed.append(f"{bar}: {error_msg}")
-                            print(f"[{name}] ✗ {bar}: {error_msg}")
+                            safe_print(f"[{name}] ✗ {bar}: {error_msg}")
                 else:
                     failed.append(f"{bar}: HTTP {sign_resp.status_code}")
-                    print(f"[{name}] ✗ {bar}: HTTP {sign_resp.status_code}")
+                    safe_print(f"[{name}] ✗ {bar}: HTTP {sign_resp.status_code}")
                 
                 # 随机延迟，避免请求过快
                 time.sleep(random.uniform(0.5, 2.0))
                 
             except Exception as e:
                 failed.append(f"{bar}: {str(e)}")
-                print(f"[{name}] ✗ {bar}: {e}")
+                safe_print(f"[{name}] ✗ {bar}: {e}")
         
         # 4. 生成结果消息
         result_parts = []
@@ -179,18 +180,18 @@ def sign_in(site, config, notify_func):
         
         result_msg = "\n".join(result_parts) if result_parts else "签到完成"
         
-        print(f"[{name}] 签到完成: 成功{len(signed)} 已签{len(already_signed)} 失败{len(failed)}")
+        safe_print(f"[{name}] 签到完成: 成功{len(signed)} 已签{len(already_signed)} 失败{len(failed)}")
         notify_func(config, name, result_msg)
         # 只要有成功或已签的贴吧，就认为本次签到成功
         return len(signed) > 0 or len(already_signed) > 0
         
     except requests.RequestException as e:
         result_msg = f"签到失败: 网络请求异常 - {e}"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return False
     except Exception as e:
         result_msg = f"签到失败: {e}"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return False

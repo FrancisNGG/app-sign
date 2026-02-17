@@ -4,6 +4,7 @@
 """
 import re
 import requests
+from . import safe_print, get_user_agent
 
 
 def sign_in(site, config, notify_func):
@@ -27,12 +28,12 @@ def sign_in(site, config, notify_func):
     
     if not cookie:
         result_msg = "签到失败: 缺少Cookie"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return False
     
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': get_user_agent(config),
         'Cookie': cookie
     }
     
@@ -48,12 +49,12 @@ def sign_in(site, config, notify_func):
         cstk_match = re.search(r'YNOTE_CSTK=(.{8})', cookie)
         if not cstk_match:
             result_msg = "签到失败: 无法提取CSTK参数"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
             return False
         
         cstk = cstk_match.group(1)
-        print(f"[{name}] CSTK: {cstk}")
+        safe_print(f"[{name}] CSTK: {cstk}")
         
         rewards = []
         
@@ -69,9 +70,9 @@ def sign_in(site, config, notify_func):
                         space_bytes = int(reward_match.group(1))
                         space_mb = round(space_bytes / (1024 * 1024), 2)
                         rewards.append(f"Android登录奖励: {space_mb}MB")
-                        print(f"[{name}] Android登录奖励: {space_mb}MB")
+                        safe_print(f"[{name}] Android登录奖励: {space_mb}MB")
         except Exception as e:
-            print(f"[{name}] Android登录奖励失败: {e}")
+            safe_print(f"[{name}] Android登录奖励失败: {e}")
         
         # 3. Android客户端签到
         try:
@@ -85,9 +86,9 @@ def sign_in(site, config, notify_func):
                         space_bytes = int(space_match.group(1))
                         space_mb = round(space_bytes / (1024 * 1024), 2)
                         rewards.append(f"Android签到: {space_mb}MB")
-                        print(f"[{name}] Android签到奖励: {space_mb}MB")
+                        safe_print(f"[{name}] Android签到奖励: {space_mb}MB")
         except Exception as e:
-            print(f"[{name}] Android签到失败: {e}")
+            safe_print(f"[{name}] Android签到失败: {e}")
         
         # 4. Windows客户端签到
         try:
@@ -101,9 +102,9 @@ def sign_in(site, config, notify_func):
                         space_bytes = int(space_match.group(1))
                         space_mb = round(space_bytes / (1024 * 1024), 2)
                         rewards.append(f"Windows签到: {space_mb}MB")
-                        print(f"[{name}] Windows签到奖励: {space_mb}MB")
+                        safe_print(f"[{name}] Windows签到奖励: {space_mb}MB")
         except Exception as e:
-            print(f"[{name}] Windows签到失败: {e}")
+            safe_print(f"[{name}] Windows签到失败: {e}")
         
         # 5. 获取用户信息
         try:
@@ -115,9 +116,9 @@ def sign_in(site, config, notify_func):
                     total_bytes = int(capacity_match.group(1))
                     total_mb = round(total_bytes / (1024 * 1024), 2)
                     rewards.append(f"总容量: {total_mb}MB")
-                    print(f"[{name}] 当前总容量: {total_mb}MB")
+                    safe_print(f"[{name}] 当前总容量: {total_mb}MB")
         except Exception as e:
-            print(f"[{name}] 获取用户信息失败: {e}")
+            safe_print(f"[{name}] 获取用户信息失败: {e}")
         
         # 生成结果消息
         if rewards:
@@ -125,17 +126,17 @@ def sign_in(site, config, notify_func):
         else:
             result_msg = "签到完成，但未获取到奖励信息"
         
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return True
         
     except requests.RequestException as e:
         result_msg = f"签到失败: 网络请求异常 - {e}"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return False
     except Exception as e:
         result_msg = f"签到失败: {e}"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return False

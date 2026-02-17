@@ -23,6 +23,9 @@ from modules import right, pcbeta, smzdm, youdao, tieba, acfun, bilibili, cookie
 import os
 import logging
 
+# 日志输出锁：防止后台线程的日志混乱
+_print_lock = threading.Lock()
+
 # 全局任务表
 daily_tasks = []
 tasks_lock = threading.Lock()
@@ -33,8 +36,20 @@ retry_queue_lock = threading.Lock()
 # Cookie 保活队列
 keepalive_queue = []
 keepalive_queue_lock = threading.Lock()
+# 任务执行锁：保证单次只执行一个签到任务，避免不同任务日志互相穿插
+task_execution_lock = threading.Lock()
 # 初始化 Cookie 保活任务（用来追踪下次执行时间）
 keepalive_tasks = {}  # {site_name: {'next_exec_time': datetime, 'site': site}}
+
+
+def safe_print(*args, **kwargs):
+    """
+    线程安全的打印函数
+    
+    使用全局锁防止多个后台线程的输出混乱
+    """
+    with _print_lock:
+        print(*args, **kwargs)
 
 
 def cleanup_old_logs(logs_dir, days=7):
@@ -104,6 +119,10 @@ def setup_logging():
     
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
+
+    # 降低第三方库调试日志噪音（避免多线程下日志穿插严重）
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("requests").setLevel(logging.WARNING)
     
     # Tee 类：同时写入日志文件和 stdout
     class TeeOutput:
@@ -213,7 +232,7 @@ def detect_site_type(site):
         if has_username:
             return pcbeta
         else:
-            print(f"[{site.get('name')}] 远景论坛需要账号密码登录")
+            safe_print(f"[{site.get('name')}] 远景论坛需要账号密码登录")
             return None
     
     # 什么值得买 - 使用 Cookie
@@ -221,7 +240,7 @@ def detect_site_type(site):
         if has_cookie:
             return smzdm
         else:
-            print(f"[{site.get('name')}] 什么值得买需要 Cookie")
+            safe_print(f"[{site.get('name')}] 什么值得买需要 Cookie")
             return None
     
     # 恩山论坛 - 使用 Cookie
@@ -229,7 +248,7 @@ def detect_site_type(site):
         if has_cookie:
             return right
         else:
-            print(f"[{site.get('name')}] 恩山论坛需要 Cookie")
+            safe_print(f"[{site.get('name')}] 恩山论坛需要 Cookie")
             return None
     
     # 有道云笔记 - 使用 Cookie
@@ -237,7 +256,7 @@ def detect_site_type(site):
         if has_cookie:
             return youdao
         else:
-            print(f"[{site.get('name')}] 有道云笔记需要 Cookie")
+            safe_print(f"[{site.get('name')}] 有道云笔记需要 Cookie")
             return None
     
     # 百度贴吧 - 使用 Cookie
@@ -245,7 +264,7 @@ def detect_site_type(site):
         if has_cookie:
             return tieba
         else:
-            print(f"[{site.get('name')}] 百度贴吧需要 Cookie")
+            safe_print(f"[{site.get('name')}] 百度贴吧需要 Cookie")
             return None
     
     # AcFun - 使用 Cookie
@@ -253,7 +272,7 @@ def detect_site_type(site):
         if has_cookie:
             return acfun
         else:
-            print(f"[{site.get('name')}] AcFun需要 Cookie")
+            safe_print(f"[{site.get('name')}] AcFun需要 Cookie")
             return None
     
     # 哔哩哔哩 - 使用 Cookie
@@ -261,19 +280,19 @@ def detect_site_type(site):
         if has_cookie:
             return bilibili
         else:
-            print(f"[{site.get('name')}] 哔哩哔哩需要 Cookie")
+            safe_print(f"[{site.get('name')}] 哔哩哔哩需要 Cookie")
             return None
     
     # 默认：根据配置判断
     if has_username:
         # 有账号密码，尝试通用账号密码登录（目前支持远景）
-        print(f"[{site.get('name')}] 检测到账号密码，但未识别平台类型")
+        safe_print(f"[{site.get('name')}] 检测到账号密码，但未识别平台类型")
         return None
     elif has_cookie:
         # 有 Cookie，尝试通用 Cookie 登录（默认恩山）
         return right
     else:
-        print(f"[{site.get('name')}] 配置不完整：缺少登录凭证")
+        safe_print(f"[{site.get('name')}] 配置不完整：缺少登录凭证")
         return None
 
 
@@ -294,7 +313,7 @@ def process_site(site, config):
     module = detect_site_type(site)
     
     if not module:
-        print(f"[{name}] 跳过：无法识别站点类型或配置不完整")
+        safe_print(f"[{name}] 跳过：无法识别站点类型或配置不完整")
         return False
     
     # 执行签到
@@ -302,7 +321,7 @@ def process_site(site, config):
         result = module.sign_in(site, config, push_notification)
         return result if result is not None else False
     except Exception as e:
-        print(f"[{name}] 执行失败: {e}")
+        safe_print(f"[{name}] 执行失败: {e}")
         push_notification(config, name, f"执行失败: {str(e)}")
         return False
 
@@ -321,6 +340,7 @@ def get_retry_config(config):
     return {
         'enabled': retry_config.get('enabled', True),
         'max_retries': retry_config.get('max_retries', 3),
+        'retry_delay_minutes': retry_config.get('retry_delay_minutes'),
         'retry_delay_hours': retry_config.get('retry_delay_hours', 1)
     }
 
@@ -365,7 +385,18 @@ def add_retry_task(task, config):
     
     # 计算重试时间（当前时间 +延迟）
     now = datetime.now()
-    retry_time = now + timedelta(hours=retry_config['retry_delay_hours'])
+    
+    # 优先使用分钟配置，否则用小时配置转换为分钟
+    retry_delay_minutes_value = retry_config.get('retry_delay_minutes')
+    if isinstance(retry_delay_minutes_value, (int, float)) and retry_delay_minutes_value > 0:
+        retry_delay_minutes = retry_delay_minutes_value
+        retry_delay_display = f"{retry_delay_minutes} 分钟"
+    else:
+        retry_delay_hours = retry_config.get('retry_delay_hours', 1)
+        retry_delay_minutes = retry_delay_hours * 60
+        retry_delay_display = f"{retry_delay_hours} 小时"
+    
+    retry_time = now + timedelta(minutes=retry_delay_minutes)
     retry_task['scheduled_time'] = retry_time.strftime('%H:%M:%S')
     retry_task['original_time'] = task.get('scheduled_time', 'unknown')
     
@@ -375,18 +406,17 @@ def add_retry_task(task, config):
     
     retry_count = retry_task['retry_count']
     name = task['site'].get('name', '未知站点')
-    retry_delay = retry_config['retry_delay_hours']
     
-    print(f"\n{'='*60}")
-    print(f"[重试] {name}")
-    print(f"原始时间: {retry_task['original_time']}")
-    print(f"重试次数: {retry_count}/{retry_config['max_retries']}")
-    print(f"延迟时间: {retry_delay} 小时")
-    print(f"预定重试时间: {retry_task['scheduled_time']}")
-    print(f"{'='*60}\n")
+    safe_print(f"\n{'='*60}")
+    safe_print(f"[重试] {name}")
+    safe_print(f"原始时间: {retry_task['original_time']}")
+    safe_print(f"重试次数: {retry_count}/{retry_config['max_retries']}")
+    safe_print(f"延迟时间: {retry_delay_display}")
+    safe_print(f"预定重试时间: {retry_task['scheduled_time']}")
+    safe_print(f"{'='*60}\n")
     
     # 通知重试信息
-    retry_msg = f"签到失败，已加入重试队列（第{retry_count}次重试，延迟{retry_delay}小时）"
+    retry_msg = f"签到失败，已加入重试队列（第{retry_count}次重试，延迟{retry_delay_display}）"
     push_notification(config, name, retry_msg)
 
 
@@ -406,9 +436,9 @@ def generate_daily_tasks(config):
     sites = config.get('sites', [])
     tasks = []
     
-    print(f"\n{'='*60}")
-    print(f"生成任务表 - {datetime.now().strftime('%Y年%m月%d日')}")
-    print(f"{'='*60}")
+    safe_print(f"\n{'='*60}")
+    safe_print(f"生成任务表 - {datetime.now().strftime('%Y年%m月%d日')}")
+    safe_print(f"{'='*60}")
     
     for site in sites:
         run_time = site.get('run_time', '09:00:00')  # 默认09:00:00
@@ -452,23 +482,23 @@ def generate_daily_tasks(config):
             # 输出任务信息
             if random_range > 0:
                 offset_min = (actual_seconds - base_seconds) // 60
-                print(f"  {site.get('name', '未知')}")
-                print(f"    基准时间: {run_time}")
-                print(f"    随机延迟: {offset_min} 分钟")
-                print(f"    执行时间: {scheduled_time}")
+                safe_print(f"  {site.get('name', '未知')}")
+                safe_print(f"    基准时间: {run_time}")
+                safe_print(f"    随机延迟: {offset_min} 分钟")
+                safe_print(f"    执行时间: {scheduled_time}")
             else:
-                print(f"  {site.get('name', '未知')}: {scheduled_time}")
+                safe_print(f"  {site.get('name', '未知')}: {scheduled_time}")
                 
         except Exception as e:
-            print(f"  [错误] {site.get('name', '未知')}: 时间格式错误 - {e}")
+            safe_print(f"  [错误] {site.get('name', '未知')}: 时间格式错误 - {e}")
             continue
     
     # 按执行时间排序
     tasks.sort(key=lambda x: x['scheduled_time'])
     
-    print(f"{'='*60}")
-    print(f"共生成 {len(tasks)} 个任务")
-    print(f"{'='*60}\n")
+    safe_print(f"{'='*60}")
+    safe_print(f"共生成 {len(tasks)} 个任务")
+    safe_print(f"{'='*60}\n")
     
     return tasks
 
@@ -508,34 +538,35 @@ def execute_task(task, config):
     else:
         title = name
     
-    print(f"\n{'='*60}")
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 执行任务")
-    print(f"站点: {title}")
-    print(f"预定时间: {scheduled_time}")
-    print(f"{'='*60}")
-    
-    # 执行签到
-    success = process_site(site, config)
-    
-    # 处理失败的情况
-    if not success and should_retry(task, config):
-        add_retry_task(task, config)
-    elif not success:
-        # 重试次数已达上限
-        retry_config = get_retry_config(config)
-        max_retries = retry_config['max_retries']
-        print(f"\n{'='*60}")
-        print(f"[任务失败] {name}")
-        print(f"已达到最大重试次数（{max_retries}），停止重试")
-        print(f"{'='*60}\n")
-        
-        final_msg = f"签到失败，已达到最大重试次数（{max_retries}），请手动检查"
-        push_notification(config, name, final_msg)
-    else:
-        # 签到成功
-        print(f"{'='*60}")
-        print(f"任务完成: {name}")
-        print(f"{'='*60}\n")
+    with task_execution_lock:
+        safe_print(f"\n{'='*60}")
+        safe_print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 执行任务")
+        safe_print(f"站点: {title}")
+        safe_print(f"预定时间: {scheduled_time}")
+        safe_print(f"{'='*60}")
+
+        # 执行签到
+        success = process_site(site, config)
+
+        # 处理失败的情况
+        if not success and should_retry(task, config):
+            add_retry_task(task, config)
+        elif not success:
+            # 重试次数已达上限
+            retry_config = get_retry_config(config)
+            max_retries = retry_config['max_retries']
+            safe_print(f"\n{'='*60}")
+            safe_print(f"[任务失败] {name}")
+            safe_print(f"已达到最大重试次数（{max_retries}），停止重试")
+            safe_print(f"{'='*60}\n")
+
+            final_msg = f"签到失败，已达到最大重试次数（{max_retries}），请手动检查"
+            push_notification(config, name, final_msg)
+        else:
+            # 签到成功
+            safe_print(f"{'='*60}")
+            safe_print(f"任务完成: {name}")
+            safe_print(f"{'='*60}\n")
 
 
 def check_and_regenerate_tasks(config):
@@ -594,8 +625,8 @@ def initialize_keepalive_tasks(config):
             'last_check': None
         }
         
-        print(f"[初始化] {name} Cookie保活任务")
-        print(f"  下次执行时间: {next_exec_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        safe_print(f"[初始化] {name} Cookie保活任务")
+        safe_print(f"  下次执行时间: {next_exec_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
 
 def execute_keepalive_task(site_name, config):
@@ -845,7 +876,7 @@ def main():
     # 加载配置
     config = load_config()
     if not config:
-        print("[错误] 无法加载配置文件")
+        safe_print("[错误] 无法加载配置文件")
         return
     
     # 处理 --check-cookie 参数
@@ -863,17 +894,20 @@ def main():
         sign_in_single_site(args.single, config)
         return
     
-    print(f"\n{'='*60}")
-    print(f"自动签到服务启动")
-    print(f"启动时间: {datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}")
-    print(f"{'='*60}\n")
+    safe_print(f"\n{'='*60}")
+    safe_print(f"自动签到服务启动")
+    safe_print(f"启动时间: {datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}")
+    safe_print(f"{'='*60}\n")
     
     # 显示重试配置
     retry_config = get_retry_config(config)
-    print(f"[配置] 错误重试机制")
-    print(f"  启用状态: {'是' if retry_config['enabled'] else '否'}")
-    print(f"  最大重试次数: {retry_config['max_retries']}")
-    print(f"  重试延迟: {retry_config['retry_delay_hours']} 小时\n")
+    safe_print(f"[配置] 错误重试机制")
+    safe_print(f"  启用状态: {'是' if retry_config['enabled'] else '否'}")
+    safe_print(f"  最大重试次数: {retry_config['max_retries']}")
+    if retry_config.get('retry_delay_minutes') is not None:
+        safe_print(f"  重试延迟: {retry_config['retry_delay_minutes']} 分钟\n")
+    else:
+        safe_print(f"  重试延迟: {retry_config['retry_delay_hours']} 小时\n")
     
     # 首次启动时尝试同步 Cookie
     # ⚠️ 重要：不再启用自动定期 CookieCloud 同步
@@ -887,13 +921,13 @@ def main():
             cookiecloud_config.get('uuid') and 
             cookiecloud_config.get('password')):
             
-            print("ℹ️  检测到 CookieCloud 配置（不启用自动同步，仅用于故障恢复）")
-            print("   Playwright 保活为主，失败时才同步 CookieCloud\n")
+            safe_print("ℹ️  检测到 CookieCloud 配置（不启用自动同步，仅用于故障恢复）")
+            safe_print("   Playwright 保活为主，失败时才同步 CookieCloud\n")
             cookiecloud_enabled = True
         else:
-            print("ℹ️  未配置 CookieCloud，将仅使用 Playwright 保活\n")
+            safe_print("ℹ️  未配置 CookieCloud，将仅使用 Playwright 保活\n")
     except Exception as e:
-        print(f"⚠️  检查 CookieCloud 配置失败: {e}\n")
+        safe_print(f"⚠️  检查 CookieCloud 配置失败: {e}\n")
     
     # 首次启动时生成任务表
     check_and_regenerate_tasks(config)
@@ -902,9 +936,9 @@ def main():
     try:
         initialize_keepalive_tasks(config)
     except Exception as e:
-        print(f"⚠️  初始化 Cookie 保活任务失败: {e}\n")
+        safe_print(f"⚠️  初始化 Cookie 保活任务失败: {e}\n")
     
-    print(f"开始监控任务执行...\n")
+    safe_print(f"开始监控任务执行...\n")
     
     last_config_load_time = None
     last_check_second = None
@@ -929,25 +963,25 @@ def main():
             if last_config_load_time is None or (now_timestamp - last_config_load_time) >= 5:
                 config = load_config()
                 if not config:
-                    print(f"[{now.strftime('%H:%M:%S')}] 警告: 配置文件加载失败")
+                    safe_print(f"[{now.strftime('%H:%M:%S')}] 警告: 配置文件加载失败")
                     time.sleep(5)
                     continue
                 last_config_load_time = now_timestamp
             else:
                 if not config:
-                    print(f"[{now.strftime('%H:%M:%S')}] 警告: 配置文件加载失败")
+                    safe_print(f"[{now.strftime('%H:%M:%S')}] 警告: 配置文件加载失败")
                     time.sleep(5)
                     continue
             
             # 检查是否需要重新生成任务表（每天0点）
             if check_and_regenerate_tasks(config):
-                print(f"[{now.strftime('%H:%M:%S')}] 任务表已更新\n")
+                safe_print(f"[{now.strftime('%H:%M:%S')}] 任务表已更新\n")
             
             # ==================== 检查和执行 Cookie 保活任务 ====================
             keepalive_tasks_to_execute = list(check_keepalive_tasks(config))
             
             if keepalive_tasks_to_execute:
-                print(f"\n[{now.strftime('%H:%M:%S')}] 检测到 {len(keepalive_tasks_to_execute)} 个 Cookie 保活任务需要执行")
+                safe_print(f"\n[{now.strftime('%H:%M:%S')}] 检测到 {len(keepalive_tasks_to_execute)} 个 Cookie 保活任务需要执行")
                 
                 # 在后台线程中执行保活任务，不阻塞主循环
                 for site_name, site_config in keepalive_tasks_to_execute:
@@ -961,11 +995,11 @@ def main():
                                     keepalive_tasks[site_name_inner]['last_check'] = datetime.now()
                             
                             if result['success']:
-                                print(f"  ✅ {site_name_inner} Cookie 保活成功")
+                                safe_print(f"  ✅ {site_name_inner} Cookie 保活成功")
                             else:
-                                print(f"  ❌ {site_name_inner} Cookie 保活失败（{result['message']}）")
+                                safe_print(f"  ❌ {site_name_inner} Cookie 保活失败（{result['message']}）")
                         except Exception as e:
-                            print(f"  ❌ {site_name_inner}: {e}")
+                            safe_print(f"  ❌ {site_name_inner}: {e}")
                     
                     t = threading.Thread(
                         target=run_keepalive,
@@ -975,7 +1009,7 @@ def main():
                     t.start()
                     time.sleep(0.3)
                 
-                print(f"[{now.strftime('%H:%M:%S')}] Cookie 保活任务已提交（后台运行）\n")
+                safe_print(f"[{now.strftime('%H:%M:%S')}] Cookie 保活任务已提交（后台运行）\n")
             
             # 检查是否有任务需要执行
             with tasks_lock:
@@ -996,7 +1030,7 @@ def main():
             
             # 执行到达时间的任务
             if all_tasks_to_execute:
-                print(f"\n[{now.strftime('%H:%M:%S')}] 检测到 {len(all_tasks_to_execute)} 个任务到达执行时间")
+                safe_print(f"\n[{now.strftime('%H:%M:%S')}] 检测到 {len(all_tasks_to_execute)} 个任务到达执行时间")
                 
                 # 使用后台线程执行，不阻塞主循环
                 # 这样可以保证主循环继续检查是否有新任务到达
@@ -1012,19 +1046,19 @@ def main():
                     if len(all_tasks_to_execute) > 1:
                         time.sleep(0.3)
                 
-                print(f"[{now.strftime('%H:%M:%S')}] 任务已提交执行（后台运行）\n")
+                safe_print(f"[{now.strftime('%H:%M:%S')}] 任务已提交执行（后台运行）\n")
             
             # 精确检查（只在秒数变化时执行重检查，其他时间轻量级轮询）
             time.sleep(0.1)
             
         except KeyboardInterrupt:
-            print(f"\n{'='*60}")
-            print(f"用户中断，程序退出")
-            print(f"退出时间: {datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}")
-            print(f"{'='*60}\n")
+            safe_print(f"\n{'='*60}")
+            safe_print(f"用户中断，程序退出")
+            safe_print(f"退出时间: {datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}")
+            safe_print(f"{'='*60}\n")
             break
         except Exception as e:
-            print(f"[错误] 主循环异常: {e}")
+            safe_print(f"[错误] 主循环异常: {e}")
             import traceback
             traceback.print_exc()
             time.sleep(10)

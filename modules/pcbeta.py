@@ -4,6 +4,7 @@
 """
 import requests
 import time
+from . import safe_print, get_user_agent
 
 
 def sign_in(site, config, notify_func):
@@ -20,16 +21,16 @@ def sign_in(site, config, notify_func):
     password = site.get('password')
     
     if not username or not password:
-        print(f"[{name}] 缺少账号或密码配置")
+        safe_print(f"[{name}] 缺少账号或密码配置")
         notify_func(config, name, "配置错误：缺少账号密码")
         return False
     
     try:
-        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        ua = get_user_agent(config)
         session = requests.Session()
         session.headers.update({"User-Agent": ua})
         
-        print(f"[{name}] 开始登录...")
+        safe_print(f"[{name}] 开始登录...")
         
         # 1. 登录
         login_url = "https://i.pcbeta.com/member.php?mod=logging&action=login&loginsubmit=yes&inajax=1"
@@ -42,7 +43,7 @@ def sign_in(site, config, notify_func):
         
         # 检查登录是否成功
         if res.status_code != 200:
-            print(f"[{name}] 登录失败：HTTP {res.status_code}")
+            safe_print(f"[{name}] 登录失败：HTTP {res.status_code}")
             notify_func(config, name, "登录失败")
             return False
         
@@ -51,13 +52,13 @@ def sign_in(site, config, notify_func):
             # 可能登录成功但没有明确提示
             pass
         
-        print(f"[{name}] 登录成功")
+        safe_print(f"[{name}] 登录成功")
         
         # 2. 领取任务
         time.sleep(2)
         task_apply_url = "https://i.pcbeta.com/home.php?mod=task&do=apply&id=149"
         res = session.get(task_apply_url, timeout=20)
-        print(f"[{name}] 已领取任务")
+        safe_print(f"[{name}] 已领取任务")
         
         # 3. 完成任务（签到）
         time.sleep(2)
@@ -100,19 +101,19 @@ def sign_in(site, config, notify_func):
                 pb_clean = re.sub(r'\s*\([^)]*总积分[^)]*\)\s*', '', pb_clean)
                 
                 info_msg = f"{nickname} {pb_clean}"
-                print(f"[{name}] ✓ {sign_status}")
-                print(f"[{name}] {info_msg}")
+                safe_print(f"[{name}] ✓ {sign_status}")
+                safe_print(f"[{name}] {info_msg}")
                 notify_func(config, name, f"{sign_status}\n{info_msg}")
             else:
-                print(f"[{name}] ✓ {sign_status}（未获取到积分详情）")
+                safe_print(f"[{name}] ✓ {sign_status}（未获取到积分详情）")
                 notify_func(config, name, sign_status)
         except Exception as e:
-            print(f"[{name}] ✓ {sign_status}（获取积分信息失败: {e}）")
+            safe_print(f"[{name}] ✓ {sign_status}（获取积分信息失败: {e}）")
             notify_func(config, name, sign_status)
         
         return True
             
     except Exception as e:
-        print(f"[{name}] ✗ 运行出错: {e}")
+        safe_print(f"[{name}] ✗ 运行出错: {e}")
         notify_func(config, name, f"签到失败: {str(e)}")
         return False

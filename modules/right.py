@@ -8,6 +8,24 @@ import requests
 import re
 import time
 from urllib.parse import urljoin
+from . import safe_print, get_user_agent
+
+
+def _is_login_required(text):
+    """判断响应是否表示未登录/登录失效"""
+    if not text:
+        return False
+    lowered = str(text).lower()
+    keywords = ["请先登录", "先登录", "未登录", "登录后", "login"]
+    return any(keyword in lowered for keyword in keywords)
+
+
+def _has_auth_cookie(cookie_dict):
+    """检查是否存在Discuz登录态cookie（*_auth）"""
+    for key, value in cookie_dict.items():
+        if str(key).lower().endswith('_auth') and str(value).strip():
+            return True
+    return False
 
 
 def sign_in(site, config, notify_func):
@@ -24,7 +42,7 @@ def sign_in(site, config, notify_func):
     cookie_raw = site.get('cookie', '')
     
     if not cookie_raw:
-        print(f"[{name}] 缺少 Cookie 配置")
+        safe_print(f"[{name}] 缺少 Cookie 配置")
         notify_func(config, name, "配置错误：缺少Cookie")
         return False
     
@@ -34,11 +52,16 @@ def sign_in(site, config, notify_func):
         if '=' in item:
             k, v = item.strip().split('=', 1)
             cookies[k] = v
+
+    if not _has_auth_cookie(cookies):
+        safe_print(f"[{name}] ✗ Cookie缺少登录态（*_auth），无法签到")
+        notify_func(config, name, "Cookie已失效，请重新登录后更新Cookie")
+        return False
     
     try:
-        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        ua = get_user_agent(config)
         
-        print(f"[{name}] 开始签到...")
+        safe_print(f"[{name}] 开始签到...")
         
         # 创建会话
         session = requests.Session()
@@ -46,7 +69,7 @@ def sign_in(site, config, notify_func):
         session.headers.update({"User-Agent": ua})
         
         # 1. 先访问首页保活Cookie
-        print(f"[{name}] 刷新会话...")
+        safe_print(f"[{name}] 刷新会话...")
         session.get(base_url, timeout=15, allow_redirects=True)
         import time
         time.sleep(1)
@@ -55,15 +78,26 @@ def sign_in(site, config, notify_func):
         res = session.get(base_url, timeout=20, allow_redirects=True)
         html = res.text
         
-        # 提取 formhash
-        fh = re.search(r'formhash=([a-z0-9]+)', html)
-        if not fh:
-            print(f"[{name}] ✗ Cookie已失效，无法获取 formhash")
+        # 提取 formhash（兼容 URL 参数与隐藏字段两种格式）
+        fh = re.search(r'formhash=([a-zA-Z0-9]+)', html)
+        if fh:
+            formhash = fh.group(1)
+        else:
+            fh_input = re.search(r'name=["\']formhash["\']\s+value=["\']([a-zA-Z0-9]+)["\']', html)
+            formhash = fh_input.group(1) if fh_input else None
+
+        if not formhash:
+            # 诊断：检查是否存在登录相关的关键词
+            if "登录" in html or "login" in html.lower():
+                safe_print(f"[{name}] ✗ Cookie已失效，检测到登录页面")
+            elif "验证" in html or "verify" in html.lower():
+                safe_print(f"[{name}] ✗ 需要验证，可能被5秒盾拦截")
+            else:
+                safe_print(f"[{name}] ✗ Cookie已失效，无法获取 formhash")
             notify_func(config, name, "Cookie已失效")
             return False
-        
-        formhash = fh.group(1)
-        print(f"[{name}] 获取 formhash 成功")
+
+        safe_print(f"[{name}] 获取 formhash 成功")
         
         # 延迟后执行签到
         time.sleep(1)
@@ -121,6 +155,12 @@ def sign_in(site, config, notify_func):
                 # 提取消息
                 message = result_json.get('message', '')
                 success = result_json.get('success', False)
+
+                # 明确判定登录失效
+                if _is_login_required(message) or _is_login_required(result_text):
+                    safe_print(f"[{name}] ✗ Cookie已失效（接口返回：{message or '请先登录'}）")
+                    notify_func(config, name, "Cookie已失效，请重新登录后更新Cookie")
+                    return False
                 
                 # 判断签到状态
                 if success or "成功" in message:
@@ -129,15 +169,21 @@ def sign_in(site, config, notify_func):
                     sign_status = "今日已签到"
                 else:
                     sign_status = message if message else "签到完成"
+
+                # 非成功且非已签，按失败处理（避免将异常提示误判为成功）
+                if not success and sign_status not in ["今日已签到", "签到成功"]:
+                    safe_print(f"[{name}] ✗ 签到失败：{sign_status}")
+                    notify_func(config, name, f"签到失败：{sign_status}")
+                    return False
                 
                 # 输出结果
                 if sign_info_parts:
                     sign_info = "\n".join(sign_info_parts)
-                    print(f"[{name}] ✓ {sign_status}")
-                    print(f"[{name}] {sign_info}")
+                    safe_print(f"[{name}] ✓ {sign_status}")
+                    safe_print(f"[{name}] {sign_info}")
                     notify_func(config, name, f"{sign_status}\n{sign_info}")
                 else:
-                    print(f"[{name}] ✓ {sign_status}")
+                    safe_print(f"[{name}] ✓ {sign_status}")
                     notify_func(config, name, sign_status)
                 
                 return True
@@ -168,28 +214,37 @@ def sign_in(site, config, notify_func):
             sign_info_parts.append(f"总签到天数：{total_days.group(1)} 天")
         
         # 判断签到状态
-        if "成功" in result_text:
+        if _is_login_required(result_text):
+            safe_print(f"[{name}] ✗ Cookie已失效（接口返回未登录）")
+            notify_func(config, name, "Cookie已失效，请重新登录后更新Cookie")
+            return False
+        elif "成功" in result_text:
             sign_status = "签到成功"
         elif "已经" in result_text or "已签" in result_text:
             sign_status = "今日已签到"
         elif "恭喜" in result_text or "完成" in result_text:
             sign_status = "签到完成"
         else:
-            sign_status = "签到完成"
+            sign_status = "签到失败"
         
         # 输出结果
         if sign_info_parts:
             sign_info = "\n".join(sign_info_parts)
-            print(f"[{name}] ✓ {sign_status}")
-            print(f"[{name}] {sign_info}")
+            safe_print(f"[{name}] ✓ {sign_status}")
+            safe_print(f"[{name}] {sign_info}")
             notify_func(config, name, f"{sign_status}\n{sign_info}")
         else:
-            print(f"[{name}] ✓ {sign_status}")
-            notify_func(config, name, sign_status)
+            if sign_status in ["签到成功", "今日已签到", "签到完成"]:
+                safe_print(f"[{name}] ✓ {sign_status}")
+                notify_func(config, name, sign_status)
+            else:
+                safe_print(f"[{name}] ✗ {sign_status}")
+                notify_func(config, name, sign_status)
+                return False
         
-        return True
+        return sign_status in ["签到成功", "今日已签到", "签到完成"]
             
     except Exception as e:
-        print(f"[{name}] ✗ 运行出错: {e}")
+        safe_print(f"[{name}] ✗ 运行出错: {e}")
         notify_func(config, name, f"签到失败: {str(e)}")
         return False

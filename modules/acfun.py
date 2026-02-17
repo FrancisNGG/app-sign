@@ -3,6 +3,7 @@
 AcFun签到模块
 """
 import requests
+from . import safe_print, get_user_agent
 
 
 def get_balance(session):
@@ -54,12 +55,12 @@ def sign_in(site, config, notify_func):
     
     if not cookie:
         result_msg = "签到失败: 缺少Cookie"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return False
     
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+        'User-Agent': get_user_agent(config),
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9',
         'Referer': 'https://www.acfun.cn/member/',
@@ -71,24 +72,24 @@ def sign_in(site, config, notify_func):
     
     try:
         # 1. 访问个人中心页面（预热session）
-        print(f"[{name}] 访问个人中心...")
+        safe_print(f"[{name}] 访问个人中心...")
         member_url = 'https://www.acfun.cn/member/'
         member_resp = session.get(member_url, timeout=10)
         
         if member_resp.status_code != 200:
             result_msg = "签到失败: 无法访问个人中心，Cookie可能已过期"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
             return False
         
         # 2. 调用签到接口
-        print(f"[{name}] 执行签到...")
+        safe_print(f"[{name}] 执行签到...")
         signin_url = 'https://www.acfun.cn/rest/pc-direct/user/signIn'
         signin_resp = session.get(signin_url, timeout=10)
         
         if signin_resp.status_code != 200:
             result_msg = f"签到失败: HTTP {signin_resp.status_code}"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
             return False
         
@@ -111,7 +112,7 @@ def sign_in(site, config, notify_func):
                 if balance_info:
                     result_msg += f"\n{balance_info}"
                 
-                print(f"[{name}] {result_msg}")
+                safe_print(f"[{name}] {result_msg}")
             
             elif result_code == 1 or 'duplicate' in result.get('msg', '').lower() or '已' in result.get('msg', ''):
                 # 已经签到过
@@ -119,7 +120,7 @@ def sign_in(site, config, notify_func):
                 result_msg = f"{msg}"
                 if balance_info:
                     result_msg += f"\n{balance_info}"
-                print(f"[{name}] {result_msg}")
+                safe_print(f"[{name}] {result_msg}")
             
             else:
                 # 其他错误
@@ -127,24 +128,24 @@ def sign_in(site, config, notify_func):
                 host_msg = result.get('host-msg', '')
                 error_info = f"{msg} {host_msg}".strip()
                 result_msg = f"签到失败: {error_info}"
-                print(f"[{name}] {result_msg}")
+                safe_print(f"[{name}] {result_msg}")
         
         except ValueError:
             # 无法解析JSON
             result_msg = "签到失败: 返回数据格式异常"
-            print(f"[{name}] {result_msg}")
-            print(f"[{name}] 响应内容: {signin_resp.text[:200]}")
+            safe_print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] 响应内容: {signin_resp.text[:200]}")
         
         notify_func(config, name, result_msg)
         return "失败" not in result_msg
         
     except requests.RequestException as e:
         result_msg = f"签到失败: 网络请求异常 - {e}"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return False
     except Exception as e:
         result_msg = f"签到失败: {e}"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return False

@@ -5,6 +5,7 @@
 import re
 import time
 import requests
+from . import safe_print, get_user_agent
 
 
 def sign_in(site, config, notify_func):
@@ -28,12 +29,12 @@ def sign_in(site, config, notify_func):
     
     if not cookie:
         result_msg = "签到失败: 缺少Cookie"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return False
     
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'User-Agent': get_user_agent(config),
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9',
         'Referer': 'https://www.bilibili.com/',
@@ -52,15 +53,15 @@ def sign_in(site, config, notify_func):
         bili_jct_match = re.search(r'bili_jct=([^;]+)', cookie)
         if not bili_jct_match:
             result_msg = "签到失败: Cookie中缺少bili_jct参数"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
             return False
         
         bili_jct = bili_jct_match.group(1)
-        print(f"[{name}] 获取bili_jct成功")
+        safe_print(f"[{name}] 获取bili_jct成功")
         
         # 2. 获取随机视频BV号
-        print(f"[{name}] 获取随机视频...")
+        safe_print(f"[{name}] 获取随机视频...")
         try:
             video_url = 'https://api.bilibili.com/x/web-interface/dynamic/region?pn=1&ps=12&rid=129'
             video_resp = session.get(video_url, timeout=10)
@@ -69,19 +70,19 @@ def sign_in(site, config, notify_func):
                 bv_match = re.search(r'(BV[A-Za-z0-9]{10})', video_resp.text)
                 if bv_match:
                     bv_id = bv_match.group(1)
-                    print(f"[{name}] 获取视频: {bv_id}")
+                    safe_print(f"[{name}] 获取视频: {bv_id}")
                 else:
                     bv_id = 'BV1xx411c7mD'  # 默认视频
-                    print(f"[{name}] 使用默认视频: {bv_id}")
+                    safe_print(f"[{name}] 使用默认视频: {bv_id}")
             else:
                 bv_id = 'BV1xx411c7mD'
-                print(f"[{name}] 使用默认视频: {bv_id}")
+                safe_print(f"[{name}] 使用默认视频: {bv_id}")
         except:
             bv_id = 'BV1xx411c7mD'
-            print(f"[{name}] 使用默认视频: {bv_id}")
+            safe_print(f"[{name}] 使用默认视频: {bv_id}")
         
         # 3. 分享视频
-        print(f"[{name}] 分享视频...")
+        safe_print(f"[{name}] 分享视频...")
         try:
             share_url = 'https://api.bilibili.com/x/web-interface/share/add'
             share_data = f'bvid={bv_id}&csrf={bili_jct}'
@@ -94,18 +95,18 @@ def sign_in(site, config, notify_func):
                 share_result = share_resp.json()
                 if share_result.get('code') == 0:
                     task_results.append("分享视频✓")
-                    print(f"[{name}] 分享视频成功")
+                    safe_print(f"[{name}] 分享视频成功")
                 else:
                     msg = share_result.get('message', '未知错误')
                     task_results.append(f"分享视频✗")
-                    print(f"[{name}] 分享视频: {msg}")
+                    safe_print(f"[{name}] 分享视频: {msg}")
             
             time.sleep(2)
         except Exception as e:
-            print(f"[{name}] 分享视频失败: {e}")
+            safe_print(f"[{name}] 分享视频失败: {e}")
         
         # 4. 观看视频（心跳）
-        print(f"[{name}] 观看视频...")
+        safe_print(f"[{name}] 观看视频...")
         try:
             heartbeat_url = 'https://api.bilibili.com/x/click-interface/web/heartbeat'
             heartbeat_data = f'bvid={bv_id}&csrf={bili_jct}&played_time=2'
@@ -116,14 +117,14 @@ def sign_in(site, config, notify_func):
             
             if heartbeat_resp.status_code == 200:
                 task_results.append("观看视频✓")
-                print(f"[{name}] 观看视频成功")
+                safe_print(f"[{name}] 观看视频成功")
             
             time.sleep(2)
         except Exception as e:
-            print(f"[{name}] 观看视频失败: {e}")
+            safe_print(f"[{name}] 观看视频失败: {e}")
         
         # 5. 漫画签到（直播签到活动已下线，已移除）
-        print(f"[{name}] 漫画签到...")
+        safe_print(f"[{name}] 漫画签到...")
         try:
             manga_url = 'https://manga.bilibili.com/twirp/activity.v1.Activity/ClockIn'
             manga_headers = headers.copy()
@@ -136,20 +137,20 @@ def sign_in(site, config, notify_func):
                 manga_text = manga_resp.text
                 if 'duplicate' in manga_text or 'clockin clockin is duplicate' in manga_text:
                     task_results.append("漫画签到✓")
-                    print(f"[{name}] 漫画签到: 今日已签到")
+                    safe_print(f"[{name}] 漫画签到: 今日已签到")
                 elif 'msg":"success"' in manga_text or '"code":0' in manga_text:
                     task_results.append("漫画签到✓")
-                    print(f"[{name}] 漫画签到成功")
+                    safe_print(f"[{name}] 漫画签到成功")
                 else:
                     task_results.append("漫画签到✓")
-                    print(f"[{name}] 漫画签到完成")
+                    safe_print(f"[{name}] 漫画签到完成")
             
             time.sleep(2)
         except Exception as e:
-            print(f"[{name}] 漫画签到失败: {e}")
+            safe_print(f"[{name}] 漫画签到失败: {e}")
         
         # 6. 获取用户信息
-        print(f"[{name}] 获取用户信息...")
+        safe_print(f"[{name}] 获取用户信息...")
         try:
             nav_url = 'https://api.bilibili.com/x/web-interface/nav'
             nav_resp = session.get(nav_url, timeout=10)
@@ -167,9 +168,9 @@ def sign_in(site, config, notify_func):
                     user_info.append(f"等级: Lv.{level} (经验{exp})")
                     user_info.append(f"硬币: {coin}个")
                     
-                    print(f"[{name}] 用户: {uname} | Lv.{level} | {coin}硬币")
+                    safe_print(f"[{name}] 用户: {uname} | Lv.{level} | {coin}硬币")
         except Exception as e:
-            print(f"[{name}] 获取用户信息失败: {e}")
+            safe_print(f"[{name}] 获取用户信息失败: {e}")
         
         # 7. 获取漫读券
         try:
@@ -184,9 +185,9 @@ def sign_in(site, config, notify_func):
                 manga_data = manga_coupon_resp.json()
                 remain = manga_data.get('data', {}).get('total_remain_amount', 0)
                 user_info.append(f"漫读券: {remain}张")
-                print(f"[{name}] 漫读券: {remain}张")
+                safe_print(f"[{name}] 漫读券: {remain}张")
         except Exception as e:
-            print(f"[{name}] 获取漫读券失败: {e}")
+            safe_print(f"[{name}] 获取漫读券失败: {e}")
         
         # 生成结果消息
         msg_parts = []
@@ -204,18 +205,18 @@ def sign_in(site, config, notify_func):
         # 检查是否有成功的任务
         has_success = any("✓" in result for result in task_results) if task_results else False
         
-        print(f"[{name}] 签到完成")
+        safe_print(f"[{name}] 签到完成")
         notify_func(config, name, result_msg)
         return has_success
         
     except requests.RequestException as e:
         result_msg = f"签到失败: 网络请求异常 - {e}"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return False
     except Exception as e:
         result_msg = f"签到失败: {e}"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         import traceback
         traceback.print_exc()
         notify_func(config, name, result_msg)

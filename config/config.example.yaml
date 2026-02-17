@@ -5,7 +5,10 @@
 retry:
   enabled: true              # 是否启用重试机制，默认开启
   max_retries: 3             # 最大重试次数，默认3次
-  retry_delay_hours: 1       # 重试延迟时间（小时），默认1小时
+  retry_delay_minutes: 1    # 重试延迟时间（分钟），默认1分钟
+
+# 全局请求头配置
+user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
 
 # CookieCloud 配置（可选）
 # 用于从浏览器自动同步 Cookie（仅用于故障恢复，不启用自动同步）

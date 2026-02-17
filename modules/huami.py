@@ -7,6 +7,7 @@ import json
 import random
 import requests
 from datetime import datetime, timedelta
+from . import safe_print
 
 
 def sign_in(site, config, notify_func):
@@ -33,7 +34,7 @@ def sign_in(site, config, notify_func):
     
     if not username or not password:
         result_msg = "刷步失败: 缺少账号或密码"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return
     
@@ -44,7 +45,7 @@ def sign_in(site, config, notify_func):
     
     try:
         # 1. 获取code
-        print(f"[{name}] 正在登录...")
+        safe_print(f"[{name}] 正在登录...")
         code_url = f'https://api-user.huami.com/registrations/+86{username}/tokens'
         code_data = {
             'client_id': 'HuaMi',
@@ -57,7 +58,7 @@ def sign_in(site, config, notify_func):
         
         if code_resp.status_code != 303:
             result_msg = f"刷步失败: 登录失败 (HTTP {code_resp.status_code})"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
             return
         
@@ -66,15 +67,15 @@ def sign_in(site, config, notify_func):
         code_match = re.search(r'access=(.+?)&', location)
         if not code_match:
             result_msg = "刷步失败: 无法获取access code"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
             return
         
         code = code_match.group(1)
-        print(f"[{name}] 获取code成功")
+        safe_print(f"[{name}] 获取code成功")
         
         # 2. 获取login_token和userid
-        print(f"[{name}] 获取登录令牌...")
+        safe_print(f"[{name}] 获取登录令牌...")
         login_url = 'https://account.huami.com/v2/client/login'
         login_data = {
             'app_name': 'com.xiaomi.hm.health',
@@ -91,7 +92,7 @@ def sign_in(site, config, notify_func):
         
         if login_resp.status_code != 200:
             result_msg = f"刷步失败: 获取登录令牌失败 (HTTP {login_resp.status_code})"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
             return
         
@@ -101,14 +102,14 @@ def sign_in(site, config, notify_func):
         
         if not login_token or not userid:
             result_msg = "刷步失败: 登录令牌或用户ID为空"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
             return
         
-        print(f"[{name}] 登录成功, 用户ID: {userid}")
+        safe_print(f"[{name}] 登录成功, 用户ID: {userid}")
         
         # 3. 获取app_token
-        print(f"[{name}] 获取应用令牌...")
+        safe_print(f"[{name}] 获取应用令牌...")
         token_url = f'https://account-cn.huami.com/v1/client/app_tokens?app_name=com.xiaomi.hm.health&dn=api-user.huami.com%2Capi-mifit.huami.com%2Capp-analytics.huami.com&login_token={login_token}'
         token_headers = {
             'User-Agent': 'Dalvik/2.1.0 (Linux; U; Android 9; MI 6 MIUI/20.6.18)'
@@ -118,7 +119,7 @@ def sign_in(site, config, notify_func):
         
         if token_resp.status_code != 200:
             result_msg = f"刷步失败: 获取应用令牌失败 (HTTP {token_resp.status_code})"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
             return
         
@@ -127,15 +128,15 @@ def sign_in(site, config, notify_func):
         
         if not app_token:
             result_msg = "刷步失败: 应用令牌为空"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
             return
         
-        print(f"[{name}] 获取应用令牌成功")
+        safe_print(f"[{name}] 获取应用令牌成功")
         
         # 4. 生成随机步数
         step = random.randint(int(min_step), int(max_step))
-        print(f"[{name}] 生成随机步数: {step} (范围: {min_step}-{max_step})")
+        safe_print(f"[{name}] 生成随机步数: {step} (范围: {min_step}-{max_step})")
         
         # 5. 生成当天日期
         today = datetime.now()
@@ -186,7 +187,7 @@ def sign_in(site, config, notify_func):
         }]
         
         # 7. 提交步数
-        print(f"[{name}] 提交步数数据...")
+        safe_print(f"[{name}] 提交步数数据...")
         submit_url = 'https://api-mifit-cn.huami.com/v1/data/band_data.json'
         submit_headers = {
             'apptoken': app_token,
@@ -205,7 +206,7 @@ def sign_in(site, config, notify_func):
         
         if submit_resp.status_code != 200:
             result_msg = f"刷步失败: 提交数据失败 (HTTP {submit_resp.status_code})"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
             notify_func(config, name, result_msg)
             return
         
@@ -216,23 +217,23 @@ def sign_in(site, config, notify_func):
             
             if message == 'success' or 'success' in message.lower():
                 result_msg = f"刷步成功\n日期: {date_str}\n步数: {step}\n账号: {username}"
-                print(f"[{name}] 刷步成功: {step}步")
+                safe_print(f"[{name}] 刷步成功: {step}步")
             else:
                 result_msg = f"刷步失败: {message}"
-                print(f"[{name}] {result_msg}")
+                safe_print(f"[{name}] {result_msg}")
         except:
             result_msg = f"刷步完成\n日期: {date_str}\n步数: {step}\n账号: {username}"
-            print(f"[{name}] {result_msg}")
+            safe_print(f"[{name}] {result_msg}")
         
         notify_func(config, name, result_msg)
         
     except requests.RequestException as e:
         result_msg = f"刷步失败: 网络请求异常 - {e}"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
     except Exception as e:
         result_msg = f"刷步失败: {e}"
-        print(f"[{name}] {result_msg}")
+        safe_print(f"[{name}] {result_msg}")
         import traceback
         traceback.print_exc()
         notify_func(config, name, result_msg)
