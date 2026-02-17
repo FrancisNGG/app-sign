@@ -76,11 +76,10 @@ def load_config(config_path='config/config.yaml'):
 
 def save_config(config, config_path='config/config.yaml', encoding='utf-8'):
     """
-    保存配置文件，采用最简单的行级替换来保留YAML格式
-    只更新cookie值所在的行，保留所有其他内容不变
-    
+    保存配置文件，优先使用 ruamel.yaml 保留格式与注释
+
     使用全局锁保护读-修改-写操作，使用临时文件+原子重命名确保文件完整性
-    
+
     Args:
         config: 配置字典
         config_path: 配置文件路径
@@ -88,66 +87,37 @@ def save_config(config, config_path='config/config.yaml', encoding='utf-8'):
     """
     with _config_write_lock:
         try:
-            # 读取原始文件的所有行
-            with open(config_path, 'r', encoding=encoding) as f:
-                lines = f.readlines()
-            
-            sites = config.get('sites', [])
-            
-            # 构建一个字典：站点名 -> cookie值
-            cookie_map = {site.get('name'): site.get('cookie', '') for site in sites if site.get('name')}
-            
-            new_lines = []
-            current_site_name = None
-            
-            for line in lines:
-                stripped = line.lstrip()
-                
-                # 检测到站点名称（- name:）
-                if stripped.startswith('- name:'):
-                    # 提取站点名称
-                    match = re.search(r'- name:\s*["\']?([^"\'\n]+)["\']?', line)
-                    if match:
-                        current_site_name = match.group(1).strip()
-                
-                # 检测cookie行
-                elif stripped.startswith('cookie:') and current_site_name in cookie_map:
-                    # 获取要设置的新cookie值
-                    new_cookie = cookie_map[current_site_name]
-                    # 提取原行的缩进
-                    indent = line[:len(line) - len(stripped)]
-                    # 构建新的cookie行，简单地替换值，保留缩进和换行
-                    new_line = f'{indent}cookie: "{new_cookie}"\n'
-                    new_lines.append(new_line)
-                    continue
-                
-                # 所有其他行保持不变
-                new_lines.append(line)
-            
             # 使用临时文件+原子重命名的方式写入，确保文件不会被损坏
-            # 获取配置文件的目录
             config_dir = os.path.dirname(config_path) or '.'
-            
-            # 在同一目录下创建临时文件（确保同一文件系统，便于原子重命名）
             temp_fd, temp_path = tempfile.mkstemp(dir=config_dir, text=True, suffix='.tmp')
             try:
                 with os.fdopen(temp_fd, 'w', encoding=encoding) as temp_file:
-                    temp_file.writelines(new_lines)
-                
-                # 原子重命名（在大多数操作系统上是原子的）
-                # 在Windows上需要先删除目标文件
+                    if HAS_RUAMEL:
+                        yaml_obj = YAML()
+                        yaml_obj.preserve_quotes = True
+                        yaml_obj.default_flow_style = False
+                        yaml_obj.width = 4096
+                        yaml_obj.dump(config, temp_file)
+                    else:
+                        yaml.safe_dump(
+                            config,
+                            temp_file,
+                            allow_unicode=True,
+                            default_flow_style=False,
+                            sort_keys=False
+                        )
+
                 if os.path.exists(config_path):
                     os.replace(temp_path, config_path)
                 else:
                     os.rename(temp_path, config_path)
             except Exception as write_error:
-                # 清理临时文件
                 try:
                     os.unlink(temp_path)
                 except:
                     pass
                 raise write_error
-            
+
         except Exception as e:
             print(f"❌ 保存配置失败: {e}")
             import traceback

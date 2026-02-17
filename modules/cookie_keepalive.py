@@ -192,10 +192,13 @@ def refresh_cookie_with_playwright(site, config):
             
             # 创建页面并访问论坛
             page = context.new_page()
-            response = page.goto(url, wait_until='networkidle', timeout=60000)
+            response = page.goto(url, wait_until='domcontentloaded', timeout=60000)
             
-            # 等待页面加载完成
-            page.wait_for_load_state('networkidle', timeout=5000)
+            # 等待页面加载完成（load 超时不影响 Cookie 刷新）
+            try:
+                page.wait_for_load_state('load', timeout=10000)
+            except Exception:
+                pass
             
             # 让JavaScript执行完成
             try:
@@ -400,11 +403,14 @@ def calculate_next_refresh_time(cookie_dict):
         datetime.datetime: 下次刷新的时间
     """
     analysis = analyze_cookie_validity(cookie_dict)
-    
+
+    # 如果缺少登录态Cookie，尽快触发保活
+    if not has_right_auth_cookie(cookie_dict):
+        return datetime.datetime.now() + datetime.timedelta(seconds=30)
+
+    # 无时间戳或已过期时，尽快触发保活，避免等待过久
     if not analysis['valid']:
-        # Cookie已过期，2秒后再尝试（避免无限循环执行）
-        # 如果Playwright刷新成功，会更新为正确的有效期时间
-        return datetime.datetime.now() + datetime.timedelta(seconds=2)
+        return datetime.datetime.now() + datetime.timedelta(minutes=2)
     
     # Cookie有效期结束时间 + 2分钟
     expires_timestamp = analysis['max_timestamp']

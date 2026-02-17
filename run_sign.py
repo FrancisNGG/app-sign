@@ -17,6 +17,8 @@ import yaml
 import time
 import random
 import threading
+import multiprocessing
+import queue
 from datetime import datetime, timedelta
 from modules.notify import push_notification
 from modules import right, pcbeta, smzdm, youdao, tieba, acfun, bilibili, cookie_sync, cookie_keepalive, cookie_metadata
@@ -36,10 +38,146 @@ retry_queue_lock = threading.Lock()
 # Cookie 保活队列
 keepalive_queue = []
 keepalive_queue_lock = threading.Lock()
+# 正在运行的保活进程
+keepalive_worker_processes = {}  # {site_name: {'process': Process, 'queue': Queue, 'start_time': datetime}}
+# 保活状态快照
+keepalive_status = {}  # {site_name: {'state': str, 'message': str, 'updated_at': datetime}}
 # 任务执行锁：保证单次只执行一个签到任务，避免不同任务日志互相穿插
 task_execution_lock = threading.Lock()
 # 初始化 Cookie 保活任务（用来追踪下次执行时间）
 keepalive_tasks = {}  # {site_name: {'next_exec_time': datetime, 'site': site}}
+
+# 保活进程超时时间（秒）
+KEEPALIVE_PROCESS_TIMEOUT_SECONDS = 300
+
+
+class _QueueWriter:
+    """将子进程输出写入队列，供主进程回显"""
+
+    def __init__(self, result_queue):
+        self._queue = result_queue
+        self._buffer = ""
+
+    def write(self, message):
+        if not message:
+            return
+
+        self._buffer += str(message)
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if line:
+                self._queue.put({'type': 'log', 'message': line})
+
+    def flush(self):
+        if self._buffer:
+            self._queue.put({'type': 'log', 'message': self._buffer})
+            self._buffer = ""
+
+
+def _keepalive_worker_process(site_config, config, result_queue):
+    """子进程执行保活任务并回传结果"""
+    import sys
+
+    sys.stdout = _QueueWriter(result_queue)
+    sys.stderr = _QueueWriter(result_queue)
+
+    try:
+        result = cookie_keepalive.keepalive_task(site_config, config)
+        result_queue.put({'type': 'result', 'ok': True, 'result': result})
+    except Exception as e:
+        result_queue.put({'type': 'result', 'ok': False, 'error': str(e)})
+
+
+def _poll_keepalive_processes():
+    """轮询保活进程结果并处理超时"""
+    now = datetime.now()
+
+    for site_name, info in list(keepalive_worker_processes.items()):
+        process = info['process']
+        result_queue = info['queue']
+        start_time = info['start_time']
+
+        # 先回显子进程日志并缓存结果
+        while True:
+            try:
+                item = result_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            if item.get('type') == 'log':
+                message = item.get('message', '').strip()
+                if message:
+                    safe_print(f"  [保活:{site_name}] {message}")
+            elif item.get('type') == 'result':
+                info['result'] = item
+
+        # 超时处理
+        if process.is_alive() and (now - start_time).total_seconds() > KEEPALIVE_PROCESS_TIMEOUT_SECONDS:
+            try:
+                process.terminate()
+                process.join(timeout=5)
+            except Exception:
+                pass
+
+            with keepalive_queue_lock:
+                if site_name in keepalive_tasks:
+                    keepalive_tasks[site_name]['running'] = False
+                    keepalive_tasks[site_name]['last_check'] = datetime.now()
+                    keepalive_tasks[site_name]['next_exec_time'] = datetime.now() + timedelta(seconds=60)
+                    keepalive_status[site_name] = {
+                        'state': 'failed',
+                        'message': '保活进程超时已终止',
+                        'updated_at': datetime.now()
+                    }
+
+            keepalive_worker_processes.pop(site_name, None)
+            continue
+
+        if process.is_alive():
+            continue
+
+        # 进程已退出，读取结果
+        result_payload = info.get('result')
+        if not result_payload:
+            result_payload = {'type': 'result', 'ok': False, 'error': '保活进程无返回结果'}
+
+        with keepalive_queue_lock:
+            if site_name in keepalive_tasks:
+                keepalive_tasks[site_name]['running'] = False
+                keepalive_tasks[site_name]['last_check'] = datetime.now()
+
+        if result_payload.get('ok'):
+            result = result_payload.get('result', {})
+            with keepalive_queue_lock:
+                if site_name in keepalive_tasks:
+                    keepalive_tasks[site_name]['next_exec_time'] = result.get('next_exec_time', datetime.now())
+                    keepalive_tasks[site_name]['last_cookie'] = keepalive_tasks[site_name]['site'].get('cookie', '')
+                    keepalive_status[site_name] = {
+                        'state': 'success' if result.get('success') else 'failed',
+                        'message': result.get('message', ''),
+                        'updated_at': datetime.now()
+                    }
+
+            if result.get('success'):
+                safe_print(f"  ✅ {site_name} Cookie 保活成功")
+                safe_print(f"  ℹ️ {site_name} Cookie保活状态: 成功（{result.get('message', '无详情')}）")
+            else:
+                safe_print(f"  ❌ {site_name} Cookie 保活失败（{result.get('message', '')}）")
+                safe_print(f"  ℹ️ {site_name} Cookie保活状态: 失败（{result.get('message', '无详情')}）")
+        else:
+            error_msg = result_payload.get('error', '未知错误')
+            with keepalive_queue_lock:
+                if site_name in keepalive_tasks:
+                    keepalive_tasks[site_name]['next_exec_time'] = datetime.now() + timedelta(seconds=60)
+                    keepalive_status[site_name] = {
+                        'state': 'failed',
+                        'message': error_msg,
+                        'updated_at': datetime.now()
+                    }
+
+            safe_print(f"  ❌ {site_name} Cookie 保活异常（{error_msg}）")
+
+        keepalive_worker_processes.pop(site_name, None)
 
 
 def safe_print(*args, **kwargs):
@@ -107,17 +245,11 @@ def setup_logging():
     
     logger.setLevel(logging.DEBUG)
     
-    # 文件处理器（使用普通 FileHandler，配合外部日期更新逻辑）
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter(log_format, datefmt=date_format))
-    
     # 控制台处理器
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(logging.Formatter(log_format, datefmt=date_format))
-    
-    logger.addHandler(file_handler)
+
     logger.addHandler(console_handler)
 
     # 降低第三方库调试日志噪音（避免多线程下日志穿插严重）
@@ -197,14 +329,13 @@ def setup_logging():
 
 
 def load_config():
-    """加载配置文件"""
-    for enc in ['utf-8', 'gbk']:
-        try:
-            with open('config/config.yaml', 'r', encoding=enc) as f:
-                return yaml.safe_load(f)
-        except:
-            continue
-    return None
+    """加载配置文件（统一使用 cookie_sync 的全局锁）"""
+    result = cookie_sync.load_config('config/config.yaml')
+    if not result:
+        return None
+    if isinstance(result, tuple):
+        return result[0]
+    return result
 
 
 def detect_site_type(site):
@@ -398,6 +529,7 @@ def add_retry_task(task, config):
     
     retry_time = now + timedelta(minutes=retry_delay_minutes)
     retry_task['scheduled_time'] = retry_time.strftime('%H:%M:%S')
+    retry_task['scheduled_datetime'] = retry_time.replace(microsecond=0)
     retry_task['original_time'] = task.get('scheduled_time', 'unknown')
     
     # 加入重试队列
@@ -471,10 +603,12 @@ def generate_daily_tasks(config):
             m = (actual_seconds % 3600) // 60
             s = actual_seconds % 60
             scheduled_time = f"{h:02d}:{m:02d}:{s:02d}"
+            scheduled_datetime = datetime.now().replace(hour=h, minute=m, second=s, microsecond=0)
             
             tasks.append({
                 'site': site,
                 'scheduled_time': scheduled_time,
+                'scheduled_datetime': scheduled_datetime,
                 'executed': False,
                 'retry_count': 0  # 新增重试计数
             })
@@ -595,38 +729,71 @@ def check_and_regenerate_tasks(config):
     return False
 
 
-def initialize_keepalive_tasks(config):
+def sync_keepalive_tasks(config):
     """
-    初始化 Cookie 保活任务
-    
-    为所有需要保活的网站创建保活任务，计算起始的下次执行时间
-    
-    Args:
-        config: 配置字典
+    同步 Cookie 保活任务映射
+
+    - 新增站点时创建任务
+    - Cookie 更新时刷新下次执行时间
+    - 移除不再配置的站点
     """
     global keepalive_tasks
-    
+
     sites = config.get('sites', [])
-    
+    active_names = set()
+
     for site in sites:
         name = site.get('name', '')
-        
+
         # 只对恩山论坛启用Cookie保活（可扩展）
         if '恩山' not in name or not site.get('cookie'):
             continue
-        
-        # 计算下次执行时间
-        cookie_dict = cookie_keepalive.parse_cookie_string(site.get('cookie', ''))
-        next_exec_time = cookie_keepalive.calculate_next_refresh_time(cookie_dict)
-        
-        keepalive_tasks[name] = {
-            'site': site,
-            'next_exec_time': next_exec_time,
-            'last_check': None
-        }
-        
-        safe_print(f"[初始化] {name} Cookie保活任务")
-        safe_print(f"  下次执行时间: {next_exec_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        active_names.add(name)
+        cookie_value = site.get('cookie', '')
+
+        if name not in keepalive_tasks:
+            cookie_dict = cookie_keepalive.parse_cookie_string(cookie_value)
+            next_exec_time = cookie_keepalive.calculate_next_refresh_time(cookie_dict)
+            keepalive_tasks[name] = {
+                'site': site,
+                'next_exec_time': next_exec_time,
+                'last_check': None,
+                'running': False,
+                'last_cookie': cookie_value
+            }
+            safe_print(f"[初始化] {name} Cookie保活任务")
+            safe_print(f"  下次执行时间: {next_exec_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            continue
+
+        task_info = keepalive_tasks[name]
+        task_info['site'] = site
+
+        if task_info.get('last_cookie') != cookie_value and not task_info.get('running', False):
+            cookie_dict = cookie_keepalive.parse_cookie_string(cookie_value)
+            next_exec_time = cookie_keepalive.calculate_next_refresh_time(cookie_dict)
+            task_info['next_exec_time'] = next_exec_time
+            task_info['last_cookie'] = cookie_value
+            task_info['last_check'] = None
+            safe_print(f"[更新] {name} Cookie已变更，保活时间已更新")
+
+    for name in list(keepalive_tasks.keys()):
+        if name not in active_names:
+            if keepalive_tasks[name].get('running', False):
+                continue
+            keepalive_tasks.pop(name, None)
+
+
+def initialize_keepalive_tasks(config):
+    """
+    初始化 Cookie 保活任务
+
+    为所有需要保活的网站创建保活任务，计算起始的下次执行时间
+
+    Args:
+        config: 配置字典
+    """
+    sync_keepalive_tasks(config)
 
 
 def execute_keepalive_task(site_name, config):
@@ -675,6 +842,9 @@ def check_keepalive_tasks(config):
     now = datetime.now()
     
     for site_name, task_info in keepalive_tasks.items():
+        if task_info.get('running', False):
+            continue
+
         next_exec_time = task_info['next_exec_time']
         
         # 如果当前时间已到或超过下次执行时间
@@ -958,6 +1128,9 @@ def main():
                 continue
             
             last_check_second = current_time
+
+            # 轮询保活进程结果与超时
+            _poll_keepalive_processes()
             
             # 每5秒重新加载一次配置（支持动态修改，但避免频繁I/O）
             if last_config_load_time is None or (now_timestamp - last_config_load_time) >= 5:
@@ -967,6 +1140,7 @@ def main():
                     time.sleep(5)
                     continue
                 last_config_load_time = now_timestamp
+                sync_keepalive_tasks(config)
             else:
                 if not config:
                     safe_print(f"[{now.strftime('%H:%M:%S')}] 警告: 配置文件加载失败")
@@ -976,6 +1150,7 @@ def main():
             # 检查是否需要重新生成任务表（每天0点）
             if check_and_regenerate_tasks(config):
                 safe_print(f"[{now.strftime('%H:%M:%S')}] 任务表已更新\n")
+                sync_keepalive_tasks(config)
             
             # ==================== 检查和执行 Cookie 保活任务 ====================
             keepalive_tasks_to_execute = list(check_keepalive_tasks(config))
@@ -985,44 +1160,54 @@ def main():
                 
                 # 在后台线程中执行保活任务，不阻塞主循环
                 for site_name, site_config in keepalive_tasks_to_execute:
-                    def run_keepalive(site_name_inner, site_config_inner):
-                        try:
-                            result = cookie_keepalive.keepalive_task(site_config_inner, config)
-                            
-                            with keepalive_queue_lock:
-                                if site_name_inner in keepalive_tasks:
-                                    keepalive_tasks[site_name_inner]['next_exec_time'] = result['next_exec_time']
-                                    keepalive_tasks[site_name_inner]['last_check'] = datetime.now()
-                            
-                            if result['success']:
-                                safe_print(f"  ✅ {site_name_inner} Cookie 保活成功")
-                            else:
-                                safe_print(f"  ❌ {site_name_inner} Cookie 保活失败（{result['message']}）")
-                        except Exception as e:
-                            safe_print(f"  ❌ {site_name_inner}: {e}")
-                    
-                    t = threading.Thread(
-                        target=run_keepalive,
-                        args=(site_name, site_config),
-                        daemon=True
+                    # 提交前先标记为运行中，避免同一任务被主循环重复提交
+                    with keepalive_queue_lock:
+                        if site_name not in keepalive_tasks:
+                            continue
+                        if keepalive_tasks[site_name].get('running', False):
+                            continue
+                        keepalive_tasks[site_name]['running'] = True
+                        keepalive_status[site_name] = {
+                            'state': 'running',
+                            'message': '后台执行中',
+                            'updated_at': datetime.now()
+                        }
+
+                    safe_print(f"  ℹ️ {site_name} Cookie保活状态: 运行中（后台）")
+
+                    result_queue = multiprocessing.Queue()
+                    process = multiprocessing.Process(
+                        target=_keepalive_worker_process,
+                        args=(site_config, config, result_queue),
+                        daemon=False
                     )
-                    t.start()
+                    with keepalive_queue_lock:
+                        keepalive_worker_processes[site_name] = {
+                            'process': process,
+                            'queue': result_queue,
+                            'start_time': datetime.now()
+                        }
+                    process.start()
                     time.sleep(0.3)
                 
-                safe_print(f"[{now.strftime('%H:%M:%S')}] Cookie 保活任务已提交（后台运行）\n")
+                safe_print(f"[{now.strftime('%H:%M:%S')}] Cookie 保活任务已提交（后台运行，可查看“Cookie保活状态”日志）\n")
             
             # 检查是否有任务需要执行
             with tasks_lock:
                 tasks_to_execute = [
-                    task for task in daily_tasks 
-                    if task['scheduled_time'] == current_time and not task['executed']
+                    task for task in daily_tasks
+                    if task.get('scheduled_datetime')
+                    and not task['executed']
+                    and now >= task['scheduled_datetime']
                 ]
             
             # 检查是否有重试任务需要执行
             with retry_queue_lock:
                 retry_tasks_to_execute = [
-                    task for task in retry_queue 
-                    if task['scheduled_time'] == current_time and not task['executed']
+                    task for task in retry_queue
+                    if task.get('scheduled_datetime')
+                    and not task['executed']
+                    and now >= task['scheduled_datetime']
                 ]
             
             # 合并所有需要执行的任务
@@ -1052,6 +1237,18 @@ def main():
             time.sleep(0.1)
             
         except KeyboardInterrupt:
+            with keepalive_queue_lock:
+                running_processes = [
+                    (site_name, info)
+                    for site_name, info in keepalive_worker_processes.items()
+                    if info['process'].is_alive()
+                ]
+
+            if running_processes:
+                running_names = [name for name, _ in running_processes]
+                safe_print(f"\n[退出] 以下Cookie保活任务仍在后台执行中: {', '.join(running_names)}")
+                safe_print("[退出] 当前不等待后台结果，最终状态请查看上方“Cookie保活状态”日志")
+
             safe_print(f"\n{'='*60}")
             safe_print(f"用户中断，程序退出")
             safe_print(f"退出时间: {datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}")

@@ -47,6 +47,7 @@ def sign_in(site, config, notify_func):
     # 任务状态收集
     task_results = []  # 横向显示的任务结果
     user_info = []  # 用户信息
+    task_success_flags = []
     
     try:
         # 1. 提取bili_jct参数（CSRF Token）
@@ -95,10 +96,12 @@ def sign_in(site, config, notify_func):
                 share_result = share_resp.json()
                 if share_result.get('code') == 0:
                     task_results.append("分享视频✓")
+                    task_success_flags.append(True)
                     safe_print(f"[{name}] 分享视频成功")
                 else:
                     msg = share_result.get('message', '未知错误')
-                    task_results.append(f"分享视频✗")
+                    task_results.append("分享视频✗")
+                    task_success_flags.append(False)
                     safe_print(f"[{name}] 分享视频: {msg}")
             
             time.sleep(2)
@@ -116,8 +119,19 @@ def sign_in(site, config, notify_func):
             heartbeat_resp = session.post(heartbeat_url, data=heartbeat_data, headers=heartbeat_headers, timeout=10)
             
             if heartbeat_resp.status_code == 200:
-                task_results.append("观看视频✓")
-                safe_print(f"[{name}] 观看视频成功")
+                try:
+                    heartbeat_result = heartbeat_resp.json()
+                except Exception:
+                    heartbeat_result = {}
+
+                if heartbeat_result.get('code', 0) == 0:
+                    task_results.append("观看视频✓")
+                    task_success_flags.append(True)
+                    safe_print(f"[{name}] 观看视频成功")
+                else:
+                    task_results.append("观看视频✗")
+                    task_success_flags.append(False)
+                    safe_print(f"[{name}] 观看视频失败")
             
             time.sleep(2)
         except Exception as e:
@@ -137,13 +151,16 @@ def sign_in(site, config, notify_func):
                 manga_text = manga_resp.text
                 if 'duplicate' in manga_text or 'clockin clockin is duplicate' in manga_text:
                     task_results.append("漫画签到✓")
+                    task_success_flags.append(True)
                     safe_print(f"[{name}] 漫画签到: 今日已签到")
                 elif 'msg":"success"' in manga_text or '"code":0' in manga_text:
                     task_results.append("漫画签到✓")
+                    task_success_flags.append(True)
                     safe_print(f"[{name}] 漫画签到成功")
                 else:
-                    task_results.append("漫画签到✓")
-                    safe_print(f"[{name}] 漫画签到完成")
+                    task_results.append("漫画签到✗")
+                    task_success_flags.append(False)
+                    safe_print(f"[{name}] 漫画签到失败")
             
             time.sleep(2)
         except Exception as e:
@@ -200,10 +217,10 @@ def sign_in(site, config, notify_func):
         if user_info:
             msg_parts.extend(user_info)
         
-        result_msg = "\n".join(msg_parts)
+        result_msg = "\n".join(msg_parts) if msg_parts else "签到失败"
         
         # 检查是否有成功的任务
-        has_success = any("✓" in result for result in task_results) if task_results else False
+        has_success = any(task_success_flags) if task_success_flags else False
         
         safe_print(f"[{name}] 签到完成")
         notify_func(config, name, result_msg)

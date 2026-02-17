@@ -18,6 +18,7 @@ import datetime
 import re
 import sys
 from pathlib import Path
+from modules import cookie_sync
 
 
 def parse_cookie_str(cookie_str):
@@ -205,12 +206,16 @@ def refresh_cookie_with_playwright(site_config):
             
             # ==================== 访问论坛 ====================
             print(f"   正在访问论坛（使用现有 Cookie，不会触发 5 秒盾）...")
-            response = page.goto(url, wait_until='networkidle', timeout=60000)  # 增加超时到 60 秒
+            response = page.goto(url, wait_until='domcontentloaded', timeout=60000)
             
             print(f"   ✅ 页面加载完成（状态码: {response.status}）")
             
             # ==================== 等待一下，让服务器返回 Set-Cookie ====================
-            page.wait_for_load_state('networkidle', timeout=5000)
+            try:
+                page.wait_for_load_state('load', timeout=10000)
+            except Exception:
+                # load 超时不影响 Cookie 刷新，只要页面已返回即可继续
+                pass
             
             # ==================== 额外等待 JavaScript 执行 ====================
             # 某些 Cookie（如百度统计）由 JavaScript 在客户端更新
@@ -472,21 +477,20 @@ def save_refreshed_cookie(result, site_name):
         return False
     
     try:
-        # 读取现有配置
-        config_path = Path('config/config.yaml')
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-        
-        # 更新对应站点的 Cookie
-        for site in config['sites']:
+        config_result = cookie_sync.load_config('config/config.yaml')
+        if not config_result or not config_result[0]:
+            print("\n❌ 保存失败: 无法加载配置")
+            return False
+
+        config, encoding = config_result
+
+        for site in config.get('sites', []):
             if site.get('name') == site_name:
                 site['cookie'] = result['new_cookie']
                 break
-        
-        # 保存回文件
-        with open(config_path, 'w', encoding='utf-8') as f:
-            yaml.dump(config, f, allow_unicode=True, default_flow_style=False, width=4096)
-        
+
+        cookie_sync.save_config(config, 'config/config.yaml', encoding)
+
         print(f"\n✅ 已将新 Cookie 保存到 config/config.yaml")
         return True
     
