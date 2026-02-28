@@ -4,7 +4,7 @@
 
 模块结构：
 - sites/: 所有支持的签到站点脚本（acfun, bilibili, pcbeta, right, smzdm, tieba, youdao）
-- core/: 核心功能模块（sign_executor, task_scheduler, credential_manager, browser_manager）
+- core/: 核心功能模块（sign_executor, task_scheduler, credential_manager）
 - utils/: 工具模块（cookie_sync, notify, cookie_metadata, cookie_keepalive）
 """
 import threading
@@ -55,7 +55,6 @@ def __getattr__(name):
         'LoginSession': 'modules.core.credential_manager',
         'CaptchaType': 'modules.core.credential_manager',
         'CaptchaInfo': 'modules.core.credential_manager',
-        'BrowserManager': 'modules.core.browser_manager',
     }
     
     # 工具模块映射
@@ -98,7 +97,6 @@ __all__ = [
     'LoginSession',
     'CaptchaType',
     'CaptchaInfo',
-    'BrowserManager',
     # Utils modules
     'load_config',
     'save_config',

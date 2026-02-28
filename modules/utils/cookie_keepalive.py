@@ -157,8 +157,11 @@ def refresh_cookie_with_playwright(site, config):
             'message': 'Playwright未安装'
         }
     
-    name = site.get('name', '恩山无线论坛')
-    url = site.get('base_url', 'https://www.right.com.cn/forum/')
+    from modules.sites import SITE_REGISTRY
+    name = site.get('name', '')
+    _module = site.get('module', '')
+    _fallback_url = (SITE_REGISTRY.get(_module) or {}).get('base_url', '')
+    url = site.get('base_url') or _fallback_url
     old_cookie_str = site.get('cookie', '')
     
     if not old_cookie_str:
@@ -271,7 +274,10 @@ def verify_cookie_validity(site, config):
         import requests
         from . import get_user_agent
         
-        base_url = site.get('base_url', 'https://www.right.com.cn/forum/')
+        from modules.sites import SITE_REGISTRY
+        _module = site.get('module', '')
+        _fallback_url = (SITE_REGISTRY.get(_module) or {}).get('base_url', '')
+        base_url = site.get('base_url') or _fallback_url
         cookie_raw = site.get('cookie', '')
         
         if not cookie_raw:

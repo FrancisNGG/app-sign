@@ -76,7 +76,7 @@ STATIC_DIR = os.path.join(WEB_DIR, 'static')
 from modules import (
     CredentialManager, LoginState, LoginSession,
     TaskScheduler, TaskType, TaskStatus,
-    SignExecutor, BrowserManager,
+    SignExecutor,
     load_config, save_config, safe_print
 )
 
@@ -108,6 +108,8 @@ sites: []
 auth:
   username: admin
   password: admin
+global:
+  user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
 """
                 with open(config_path, 'w', encoding='utf-8') as f:
                     f.write(minimal_config)
@@ -169,7 +171,7 @@ class AppContext:
         self.sign_executor: SignExecutor = SignExecutor(
             result_recorder=self._record_sign_result
         )
-        self.browser_manager: Optional[BrowserManager] = None
+        self.browser_manager = None
         
         # 异步事件循环
         self.async_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -732,8 +734,8 @@ def fetch_cookie_start():
         if not module:
             return jsonify({'status': 'error', 'message': '缺少 module 参数'}), 400
 
-        from web.captcha_browser import LOGIN_URLS
-        if module not in LOGIN_URLS:
+        from modules.sites import SITE_REGISTRY
+        if module not in SITE_REGISTRY:
             return jsonify({'status': 'error', 'message': f'模块 {module} 不支持账号密码登录'}), 400
 
         manager = get_fetch_cookie_manager()
@@ -754,7 +756,7 @@ def fetch_cookie_start():
         return jsonify({
             'status': 'success',
             'session_id': session_id,
-            'login_url': LOGIN_URLS[module],
+            'login_url': SITE_REGISTRY[module]['base_url'],
             'viewport': {'width': 1280, 'height': 720}
         })
     except Exception as e:
@@ -1709,7 +1711,8 @@ def get_settings():
             'bark_url': bark.get('url', ''),
             'bark_icon': bark.get('icon', ''),
             'bark_max_retries': bark.get('max_retries', 2),
-            'bark_retry_delay_seconds': bark.get('retry_delay_seconds', 1.0)
+            'bark_retry_delay_seconds': bark.get('retry_delay_seconds', 1.0),
+            'user_agent': (config.get('global') or {}).get('user_agent', '')
         })
     except Exception as e:
         logger.error(f"获取设置异常: {e}")
@@ -1799,6 +1802,13 @@ def save_settings():
         config['notify']['bark']['icon'] = data.get('bark_icon', '').strip()
         config['notify']['bark']['max_retries'] = int(data.get('bark_max_retries', 2))
         config['notify']['bark']['retry_delay_seconds'] = int(data.get('bark_retry_delay_seconds', 1))
+
+        # 浏览器标识 — User-Agent
+        user_agent = data.get('user_agent', '').strip()
+        if user_agent:
+            if 'global' not in config:
+                config['global'] = {}
+            config['global']['user_agent'] = user_agent
 
         save_config(config, 'config/config.yaml', encoding)
         logger.info(f"系统设置已更新: 用户名={auth_username}")

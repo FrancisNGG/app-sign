@@ -251,7 +251,21 @@
             </div>
         </div>
 
-        <!-- ② 通知设置 -->
+        <!-- ② 浏览器标识 -->
+        <div class="block">
+            <div class="block-title">🌐 浏览器标识</div>
+            <div class="block-body">
+                <div class="form-group">
+                    <label>User-Agent <span class="hint">（签到请求与获取 Cookie 时使用，留空则不修改）</span></label>
+                    <textarea id="settingsUserAgent" rows="3"
+                        style="resize:vertical;font-size:12px;font-family:monospace;width:100%;box-sizing:border-box;"
+                        placeholder="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"></textarea>
+                    <div class="sub-hint">修改后重启容器或服务才对 Playwright 浏览器生效</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ③ 通知设置 -->
         <div class="block">
             <div class="block-title">🔔 通知设置</div>
             <div class="block-body">
@@ -408,6 +422,7 @@
                 document.getElementById('settingsBarkIcon').value = d.bark_icon || '';
                 document.getElementById('settingsBarkMaxRetries').value = d.bark_max_retries ?? 2;
                 document.getElementById('settingsBarkRetryDelay').value = d.bark_retry_delay_seconds ?? 1;
+                document.getElementById('settingsUserAgent').value = d.user_agent || '';
                 // 根据 bark_enabled 初始化展开状态
                 toggleBarkFields();
             } catch (e) {
@@ -439,7 +454,8 @@
                     bark_url: document.getElementById('settingsBarkUrl').value.trim(),
                     bark_icon: document.getElementById('settingsBarkIcon').value.trim(),
                     bark_max_retries: parseInt(document.getElementById('settingsBarkMaxRetries').value) || 2,
-                    bark_retry_delay_seconds: parseInt(document.getElementById('settingsBarkRetryDelay').value) || 1
+                    bark_retry_delay_seconds: parseInt(document.getElementById('settingsBarkRetryDelay').value) || 1,
+                    user_agent: document.getElementById('settingsUserAgent').value.trim()
                 };
                 if (password) payload.auth_password = password;
 

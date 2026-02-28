@@ -14,19 +14,9 @@ import threading
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
+from modules.sites import SITE_REGISTRY
 
 logger = logging.getLogger(__name__)
-
-# ==================== 各站点登录页 URL ====================
-LOGIN_URLS: Dict[str, str] = {
-    'smzdm':    'https://user.smzdm.com/login',
-    'bilibili': 'https://passport.bilibili.com/login',
-    'acfun':    'https://www.acfun.cn/login',
-    'tieba':    'https://tieba.baidu.com/index.html',
-    'pcbeta':   'https://bbs.pcbeta.com/member.php?mod=logging&action=login',
-    'right':    'https://www.right.com.cn/forum/member.php?mod=logging&action=login',
-    'youdao':   'https://account.youdao.com/signIn?service=mobilemail&back_url=http%3A%2F%2Fnote.youdao.com',
-}
 
 # 浏览器渲染分辨率（与前端保持一致）
 VIEWPORT_W = 1280
@@ -55,7 +45,8 @@ class FetchCookieSession:
         self._browser = None
         self._context = None
         self._page = None
-        self._page_lock = asyncio.Lock()
+        # 注意：asyncio.Lock() 必须在事件循环线程中创建，延迟到 initialize() 里赋值
+        self._page_lock: Optional[asyncio.Lock] = None
 
     # ---- 生命周期 ----
 
@@ -65,22 +56,148 @@ class FetchCookieSession:
 
     async def initialize(self) -> None:
         """启动 headless Chromium，导航到登录页。"""
+        # 在事件循环线程内创建 Lock，避免 Python 3.10+ RuntimeError
+        self._page_lock = asyncio.Lock()
+
+        # 从 config.yaml 读取 user_agent，保持与签到请求一致
+        import re as _re
+        _ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36'
+        try:
+            import os as _os, yaml as _yaml
+            _cfg_path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), 'config', 'config.yaml')
+            with open(_cfg_path, 'r', encoding='utf-8') as _f:
+                _cfg = _yaml.safe_load(_f)
+            _ua = (_cfg.get('global') or {}).get('user_agent') or _ua
+        except Exception:
+            pass
+        # 从 UA 中提取 Chrome 主版本号，同步到 sec-ch-ua
+        _m = _re.search(r'Chrome/(\d+)', _ua)
+        _chrome_ver = _m.group(1) if _m else '144'
+
         from playwright.async_api import async_playwright
 
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(
             headless=True,
-            args=['--no-sandbox', '--disable-setuid-sandbox',
-                  '--disable-dev-shm-usage']
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                # 隐藏自动化特征，避免风控
+                '--disable-blink-features=AutomationControlled',
+                '--disable-infobars',
+                '--disable-extensions',
+                '--disable-default-apps',
+                '--disable-component-update',
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--disable-background-networking',
+                '--disable-sync',
+                '--metrics-recording-only',
+                '--disable-client-side-phishing-detection',
+                '--disable-hang-monitor',
+                '--disable-prompt-on-repost',
+                '--password-store=basic',
+                '--use-mock-keychain',
+                # 模拟正常分辨率
+                f'--window-size={VIEWPORT_W},{VIEWPORT_H}',
+            ]
         )
         self._context = await self._browser.new_context(
             viewport={'width': VIEWPORT_W, 'height': VIEWPORT_H},
-            user_agent=(
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/124.0.0.0 Safari/537.36'
-            )
+            user_agent=_ua,
+            locale='zh-CN',
+            timezone_id='Asia/Shanghai',
+            extra_http_headers={
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'sec-ch-ua': f'"Google Chrome";v="{_chrome_ver}", "Chromium";v="{_chrome_ver}", "Not_A Brand";v="24"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"macOS"',
+            },
+            permissions=['geolocation'],
+            java_script_enabled=True,
         )
+        # 注入脚本：覆盖自动化检测属性，模拟 macOS Chrome 真实环境
+        await self._context.add_init_script(f"""
+            // 删除 webdriver 标记
+            Object.defineProperty(navigator, 'webdriver', {{get: () => undefined}});
+
+            // 模拟 macOS Chrome 完整 window.chrome 对象
+            window.chrome = {{
+                app: {{
+                    InstallState: {{DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed'}},
+                    RunningState: {{CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running'}},
+                    getDetails: function() {{}},
+                    getIsInstalled: function() {{}},
+                    installState: function() {{}},
+                    isInstalled: false,
+                    runningState: function() {{}}
+                }},
+                csi: function() {{}},
+                loadTimes: function() {{
+                    return {{
+                        commitLoadTime: Date.now() / 1000 - 0.3,
+                        connectionInfo: 'h2',
+                        finishDocumentLoadTime: Date.now() / 1000 - 0.1,
+                        finishLoadTime: Date.now() / 1000,
+                        firstPaintAfterLoadTime: 0,
+                        firstPaintTime: Date.now() / 1000 - 0.2,
+                        navigationType: 'Other',
+                        npnNegotiatedProtocol: 'h2',
+                        requestTime: Date.now() / 1000 - 0.5,
+                        startLoadTime: Date.now() / 1000 - 0.4,
+                        wasAlternateProtocolAvailable: false,
+                        wasFetchedViaSpdy: true,
+                        wasNpnNegotiated: true
+                    }};
+                }},
+                runtime: {{
+                    OnInstalledReason: {{CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update'}},
+                    OnRestartRequiredReason: {{APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic'}},
+                    PlatformArch: {{ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64'}},
+                    PlatformNaclArch: {{ARM: 'arm', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64'}},
+                    PlatformOs: {{ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win'}},
+                    RequestUpdateCheckStatus: {{NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available'}},
+                    connect: function() {{}},
+                    id: undefined
+                }}
+            }};
+
+            // 模拟 macOS platform
+            Object.defineProperty(navigator, 'platform', {{get: () => 'MacIntel'}});
+
+            // 覆盖 plugins，模拟 macOS Chrome 真实插件列表
+            const _plugins = [
+                {{name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format'}},
+                {{name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: ''}},
+                {{name: 'Native Client', filename: 'internal-nacl-plugin', description: ''}}
+            ];
+            Object.defineProperty(navigator, 'plugins', {{
+                get: () => Object.assign(_plugins, {{
+                    item: (i) => _plugins[i],
+                    namedItem: (n) => _plugins.find(p => p.name === n),
+                    refresh: () => {{}}
+                }})
+            }});
+            Object.defineProperty(navigator, 'mimeTypes', {{get: () => [{{type: 'application/pdf'}}, {{type: 'application/x-google-chrome-pdf'}}]}});
+
+            // 覆盖 languages
+            Object.defineProperty(navigator, 'languages', {{get: () => ['zh-CN', 'zh', 'en-US', 'en']}});
+
+            // 覆盖 hardwareConcurrency（macOS 常见核数）
+            Object.defineProperty(navigator, 'hardwareConcurrency', {{get: () => 8}});
+
+            // 覆盖 deviceMemory
+            Object.defineProperty(navigator, 'deviceMemory', {{get: () => 8}});
+
+            // 覆盖 permissions
+            const _origQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (params) =>
+                params.name === 'notifications'
+                    ? Promise.resolve({{state: Notification.permission}})
+                    : _origQuery(params);
+        """)
         self._page = await self._context.new_page()
         try:
             await self._page.goto(
@@ -197,7 +314,7 @@ class FetchCookieManager:
 
     def create_session(self, module: str) -> Tuple[str, FetchCookieSession]:
         """创建新会话（尚未初始化浏览器），返回 (session_id, session)。"""
-        login_url = LOGIN_URLS.get(module, 'about:blank')
+        login_url = (SITE_REGISTRY.get(module) or {}).get('base_url', 'about:blank')
         session_id = f"fc_{uuid.uuid4().hex[:12]}"
         session = FetchCookieSession(session_id, module, login_url)
         with self._lock:
