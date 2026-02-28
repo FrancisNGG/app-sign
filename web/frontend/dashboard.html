@@ -761,7 +761,7 @@
                                     if (s === 'success') statusTag = '<span style="color:#4CAF50">✓ 上次成功</span>';
                                     else if (s === 'failed') statusTag = '<span style="color:#f44336">✗ 上次失败</span>';
                                     else statusTag = '✓ 已启用';
-                                    // 时间段
+                                    // 时间段：last_keepalive_time + interval_minutes
                                     let timeTag = '';
                                     if (lastStr) {
                                         const nextMs = new Date(lastStr).getTime() + intervalMin * 60000;

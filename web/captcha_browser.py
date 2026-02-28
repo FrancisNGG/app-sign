@@ -290,15 +290,21 @@ class FetchCookieSession:
     # ---- Cookie 提取 ----
 
     async def extract_cookies(self) -> Optional[str]:
-        """提取当前上下文所有 Cookie，返回 `name=value; ...` 格式字符串。"""
+        """提取当前上下文所有 Cookie，返回 `name=value; ...` 格式字符串。
+        同名 Cookie 以最后一个值为准（避免重复名称引发认证混乱）。
+        """
         if not self._context:
             return None
         try:
             cookies = await self._context.cookies()
             if not cookies:
                 return ''
-            parts = [f"{c['name']}={c['value']}" for c in cookies if c.get('name')]
-            return '; '.join(parts)
+            # 去重：同名 cookie 取最后出现的值（Playwright 返回按写入顺序排列）
+            deduped: dict = {}
+            for c in cookies:
+                if c.get('name'):
+                    deduped[c['name']] = c['value']
+            return '; '.join(f"{k}={v}" for k, v in deduped.items())
         except Exception as e:
             logger.error(f"[{self.session_id}] 提取 Cookie 失败: {e}")
             return None
@@ -314,7 +320,9 @@ class FetchCookieManager:
 
     def create_session(self, module: str) -> Tuple[str, FetchCookieSession]:
         """创建新会话（尚未初始化浏览器），返回 (session_id, session)。"""
-        login_url = (SITE_REGISTRY.get(module) or {}).get('base_url', 'about:blank')
+        site_info = SITE_REGISTRY.get(module) or {}
+        # 优先使用 login_url（直接进入登录页）；不存在时退回 base_url
+        login_url = site_info.get('login_url') or site_info.get('base_url', 'about:blank')
         session_id = f"fc_{uuid.uuid4().hex[:12]}"
         session = FetchCookieSession(session_id, module, login_url)
         with self._lock:

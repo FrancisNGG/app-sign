@@ -177,6 +177,10 @@ class AppContext:
         self.async_loop: Optional[asyncio.AbstractEventLoop] = None
         self.async_thread: Optional[threading.Thread] = None
         self.async_loop_lock = threading.Lock()
+
+        # 保活并发保护：记录当前正在执行保活的站点名，防止同站点并发
+        self._running_keepalives: set = set()
+        self._running_keepalives_lock = threading.Lock()
     
     def _record_sign_result(self, site_name: str, success: bool, message: str, error_type: str = None):
         """SignExecutor的结果回调 - 直接记录签到结果"""
@@ -273,28 +277,36 @@ class AppContext:
             last_str = ka.get('last_keepalive_time')
             site_name = site.get('aliases') or site.get('name', '?')
 
-            # next_keepalive_time 优先（失败后提前重试用）
-            next_ka_str = ka.get('next_keepalive_time')
-            if next_ka_str:
-                try:
-                    if now < datetime.fromisoformat(next_ka_str):
-                        continue  # 未到重试时间
-                except Exception:
-                    pass  # 解析失败则不跳过
-            elif last_str:
+            # ---- 判断是否到期：统一用 last_keepalive_time + interval_minutes ----
+            run_reason = None
+            if last_str:
                 try:
                     last_dt = datetime.fromisoformat(last_str)
-                    if now < last_dt + timedelta(minutes=interval_min):
-                        continue  # 未到常规间隔时间
+                    due_dt = last_dt + timedelta(minutes=interval_min)
+                    if now < due_dt:
+                        continue  # 未到执行时间
+                    overdue_sec = int((now - due_dt).total_seconds())
+                    if overdue_sec > 60:
+                        run_reason = f'补跑（应于 {due_dt.strftime("%H:%M:%S")} 执行，已超期 {overdue_sec//60} 分 {overdue_sec%60} 秒）'
+                    else:
+                        run_reason = f'正常到期（间隔 {interval_min} 分钟）'
                 except Exception:
-                    pass  # 解析失败则立即执行
-            # else: 从未执行过，立即执行
+                    run_reason = 'last_keepalive_time 解析失败，立即执行'
+            else:
+                run_reason = '首次执行'
 
-            logger.info(f"[KeepAlive] {site_name} 开始保活（间隔 {interval_min} 分钟）")
+            # ---- 防并发：跳过正在运行的站点 ----
+            with self._running_keepalives_lock:
+                if site_name in self._running_keepalives:
+                    logger.debug(f"[KeepAlive] {site_name} 保活仍在进行中，跳过本轮")
+                    continue
+                self._running_keepalives.add(site_name)
+
+            logger.info(f"[KeepAlive] {site_name} 开始保活 — {run_reason}")
 
             # 在独立线程中执行，避免阻塞检查循环
             def _do_keepalive(site_cfg=site, s_name=site_name, enc=encoding,
-                             ka_interval=interval_min):
+                             ka_interval=interval_min, _ctx=self):
                 try:
                     result = refresh_cookie_with_playwright(site_cfg, full_config)
                     if result.get('success'):
@@ -336,7 +348,7 @@ class AppContext:
                                     s['cookie_metadata'] = metadata.to_dict()
                                     ka = s.setdefault('keepalive', {})
                                     ka['last_keepalive_time'] = datetime.now().isoformat()
-                                    ka.pop('next_keepalive_time', None)  # 成功后清除提前重试标记
+                                    ka.pop('next_keepalive_time', None)  # 清理旧字段
                                     ka['last_keepalive_status'] = 'success'
                                     ka['last_keepalive_message'] = result.get('message', '保活成功')
                                     break
@@ -354,12 +366,9 @@ class AppContext:
                                     s.get('aliases') == s_name or s.get('name') == s_name
                                 ):
                                     ka = s.setdefault('keepalive', {})
-                                    # 不更新 last_keepalive_time，保留上次成功时间
-                                    # 60 分钟后重试（单位：分钟）
-                                    _RETRY_DELAY_MIN = 60
-                                    ka['next_keepalive_time'] = (
-                                        datetime.now() + timedelta(minutes=_RETRY_DELAY_MIN)
-                                    ).isoformat()
+                                    # 失败也更新 last_keepalive_time，确保下次按 interval 正常调度
+                                    ka['last_keepalive_time'] = datetime.now().isoformat()
+                                    ka.pop('next_keepalive_time', None)  # 清理旧字段
                                     ka['last_keepalive_status'] = 'failed'
                                     ka['last_keepalive_message'] = msg
                                     # 累加重试次数到 cookie_metadata
@@ -372,6 +381,10 @@ class AppContext:
                             pass
                 except Exception as e:
                     logger.error(f"[KeepAlive] {s_name} 执行异常: {e}")
+                finally:
+                    # 无论成功/失败/异常，解除"正在运行"标记
+                    with _ctx._running_keepalives_lock:
+                        _ctx._running_keepalives.discard(s_name)
 
             threading.Thread(target=_do_keepalive, daemon=True,
                              name=f"KA-{site_name}").start()
@@ -756,7 +769,7 @@ def fetch_cookie_start():
         return jsonify({
             'status': 'success',
             'session_id': session_id,
-            'login_url': SITE_REGISTRY[module]['base_url'],
+            'login_url': SITE_REGISTRY[module].get('login_url') or SITE_REGISTRY[module].get('base_url', ''),
             'viewport': {'width': 1280, 'height': 720}
         })
     except Exception as e:

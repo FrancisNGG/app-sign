@@ -44,14 +44,43 @@ def has_right_auth_cookie(cookie_dict):
     return False
 
 
+def has_auth_cookie(cookie_dict, module=''):
+    """站点感知的登录态 Cookie 检查。
+    
+    从 SITE_REGISTRY[module]['auth_cookies'] 读取标记列表：
+    - 以 '*' 开头表示 **后缀匹配**，如 '*_auth' 匹配所有以 _auth 结尾的 key
+    - 否则为 **精确 key 名** 匹配
+    未知模块退回到 has_right_auth_cookie 的逻辑。
+    """
+    if not isinstance(cookie_dict, dict):
+        return False
+    if module:
+        from modules.sites import SITE_REGISTRY
+        auth_keys = (SITE_REGISTRY.get(module) or {}).get('auth_cookies', [])
+    else:
+        auth_keys = []
+    if not auth_keys:
+        return has_right_auth_cookie(cookie_dict)
+    for pattern in auth_keys:
+        if pattern.startswith('*'):
+            suffix = pattern[1:]
+            if any(str(k).endswith(suffix) and str(v).strip() for k, v in cookie_dict.items()):
+                return True
+        else:
+            if pattern in cookie_dict and str(cookie_dict[pattern]).strip():
+                return True
+    return False
+
+
 def page_indicates_logged_out(html_text):
     """判断页面内容是否显示未登录状态"""
     if not html_text:
         return True
     text = str(html_text).lower()
+    # 注意：不要使用单独的 '登录'，它会匹配 '退出登录' 导致误判
     keywords = [
         '请先登录', '先登录', '未登录', '登录后',
-        'member.php?mod=logging', 'action=login', '登录'
+        'member.php?mod=logging', 'action=login'
     ]
     return any(keyword in text for keyword in keywords)
 
@@ -175,13 +204,26 @@ def refresh_cookie_with_playwright(site, config):
         # 解析现有Cookie
         old_cookies = parse_cookie_string(old_cookie_str)
         
+        # 从 base_url 动态提取 Cookie 注入域名
+        # 处理 .com.cn / .co.uk 等二级 ccTLD：末位 2 字符 + 次末位 ≤3 字符时取最后3段
+        from urllib.parse import urlparse as _urlparse
+        _parsed = _urlparse(url)
+        _hostname = _parsed.hostname or 'right.com.cn'
+        _parts = _hostname.split('.')
+        if len(_parts) >= 3 and len(_parts[-1]) == 2 and len(_parts[-2]) <= 3:
+            # e.g. www.right.com.cn → .right.com.cn
+            _cookie_domain = '.' + '.'.join(_parts[-3:])
+        else:
+            # e.g. note.youdao.com → .youdao.com
+            _cookie_domain = '.' + '.'.join(_parts[-2:])
+
         # 转换为Playwright格式
         cookie_list = []
         for name_key, value in old_cookies.items():
             cookie_list.append({
                 'name': name_key,
                 'value': value,
-                'domain': '.right.com.cn',
+                'domain': _cookie_domain,
                 'path': '/'
             })
         
@@ -230,8 +272,8 @@ def refresh_cookie_with_playwright(site, config):
             
             new_cookie_dict = parse_cookie_string(new_cookie_str)
 
-            # 关键校验：必须拿到登录态cookie，否则即使能打开页面也不算成功
-            if new_cookie_str and has_right_auth_cookie(new_cookie_dict):
+            # 关键校验：必须拿到对应站点的登录态 cookie
+            if new_cookie_str and has_auth_cookie(new_cookie_dict, _module):
                 return {
                     'success': True,
                     'cookie_raw': new_cookie_str,
@@ -241,7 +283,7 @@ def refresh_cookie_with_playwright(site, config):
                 return {
                     'success': False,
                     'cookie_raw': None,
-                    'message': 'Playwright未获取到登录态Cookie（缺少_auth）'
+                    'message': f'Playwright未获取到登录态Cookie（模块: {_module}）'
                 }
     
     except Exception as e:
@@ -291,11 +333,12 @@ def verify_cookie_validity(site, config):
         cookies = parse_cookie_string(cookie_raw)
 
         # 先检查是否包含登录态cookie
-        if not has_right_auth_cookie(cookies):
+        _module_v = site.get('module', '')
+        if not has_auth_cookie(cookies, _module_v):
             return {
                 'valid': False,
                 'status_code': 0,
-                'message': '缺少登录态Cookie（*_auth）'
+                'message': '缺少登录态Cookie'
             }
         
         # 创建会话
@@ -325,12 +368,13 @@ def verify_cookie_validity(site, config):
         }
 
 
-def calculate_next_refresh_time(cookie_dict):
+def calculate_next_refresh_time(cookie_dict, module=''):
     """
     计算下一次刷新时间：Cookie有效期结束后2分钟
     
     Args:
         cookie_dict: Cookie字典
+        module: 站点模块名（用于站点感知的 auth cookie 检查）
         
     Returns:
         datetime.datetime: 下次刷新的时间
@@ -338,7 +382,7 @@ def calculate_next_refresh_time(cookie_dict):
     analysis = analyze_cookie_validity(cookie_dict)
 
     # 如果缺少登录态Cookie，尽快触发保活
-    if not has_right_auth_cookie(cookie_dict):
+    if not has_auth_cookie(cookie_dict, module):
         return datetime.datetime.now() + datetime.timedelta(seconds=30)
 
     # 无时间戳或已过期时，尽快触发保活，避免等待过久
@@ -378,6 +422,7 @@ def keepalive_task(site, config):
     """
     name = site.get('name', '恩山无线论坛')
     cookie_raw = site.get('cookie', '')
+    _module = site.get('module', '')
     
     steps = []
     
@@ -402,7 +447,7 @@ def keepalive_task(site, config):
         steps.append(f"Cookie已过期，立即刷新")
     
     # ==================== 步骤2: 计算下次执行时间 ====================
-    next_exec_time = calculate_next_refresh_time(cookie_dict)
+    next_exec_time = calculate_next_refresh_time(cookie_dict, _module)
     print(f"\n[步骤2] 计算下次执行时间")
     print(f"  预定时间: {next_exec_time.strftime('%Y-%m-%d %H:%M:%S')}")
     steps.append(f"下次执行时间: {next_exec_time.strftime('%H:%M:%S')}")
@@ -420,7 +465,7 @@ def keepalive_task(site, config):
         
         # 重新计算下次执行时间
         cookie_dict = parse_cookie_string(cookie_raw)
-        next_exec_time = calculate_next_refresh_time(cookie_dict)
+        next_exec_time = calculate_next_refresh_time(cookie_dict, _module)
         
         steps.append(f"Playwright刷新成功，新Cookie：{len(cookie_raw)} characters")
         steps.append(f"下次执行时间更新为: {next_exec_time.strftime('%H:%M:%S')}")

@@ -11,11 +11,11 @@ from datetime import datetime
 
 from .task_scheduler import Task, TaskStatus
 
-# 可选的通知管理器
+# 通知推送
 try:
-    from modules.utils.notify import NotificationManager
+    from modules.utils.notify import push_notification
 except ImportError:
-    NotificationManager = None
+    push_notification = None
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +41,12 @@ class SignExecutor:
     - 发送通知
     """
     
-    def __init__(self, notify_manager: NotificationManager = None, result_recorder=None):
+    def __init__(self, notify_manager=None, result_recorder=None):
         """
         初始化签到执行器
         
         Args:
-            notify_manager: 通知管理器实例
+            notify_manager: 保留参数（已废弃，通知直接从配置文件读取）
             result_recorder: 结果记录回调函数 (site_name, success, message, error_type)
         """
         self.notify_manager = notify_manager
@@ -217,16 +217,16 @@ class SignExecutor:
         message: str
     ):
         """发送通知"""
-        if self.notify_manager:
-            try:
-                title = f"{'✓' if status == 'success' else '✗'} {site_name}"
-                await self.notify_manager.send(
-                    title=title,
-                    message=message,
-                    status=status
-                )
-            except Exception as e:
-                logger.warning(f"发送通知失败: {str(e)}")
+        if not push_notification:
+            return
+        try:
+            from modules.utils.cookie_sync import load_config
+            config, _ = load_config('config/config.yaml')
+            icon = '✓' if status == 'success' else '✗'
+            result_msg = f"{icon} {message}"
+            push_notification(config, site_name, result_msg)
+        except Exception as e:
+            logger.warning(f"发送通知失败: {str(e)}")
     
     async def handle_execution_error(
         self,
