@@ -1,16 +1,12 @@
-version: '3.8'
-
 services:
-  sign-app:
+  app-sign:
     build: .
-    image: app-sign:latest
-    container_name: app-sign
+    image: app-sign:v2.0
+    container_name: app-sign-v2
     
-    # 代码和配置挂载
+    # 代码、配置和缓存挂载
     volumes:
-      - /volume1/docker/app-sign:/app
-      - /volume1/docker/app-sign/logs:/app/logs
-      - /volume1/docker/app-sign/config:/app/config
+      - ./:/app
     
     working_dir: /app
     
@@ -20,5 +16,16 @@ services:
     
     restart: always
     
-    # 使用 host 网络模式（DSM 环境中可访问外网）
-    network_mode: "host"
+    # 只暴露Web服务端口
+    ports:
+      - "21333:21333"
+    
+    # 使用自定义网络优化性能
+    networks:
+      - app-network
+
+# 定义自定义网络
+networks:
+  app-network:
+    driver: bridge
+

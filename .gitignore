@@ -17,6 +17,7 @@ config/config.yaml
 logs/
 screenshots/
 cookie_*.txt
+cache
 
 # IDE
 .vscode/

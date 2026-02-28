@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>账号登录获取 Cookie</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+}
+
+/* ---- 顶部状态栏 ---- */
+#topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    background: #16213e;
+    border-bottom: 1px solid #0f3460;
+    flex-shrink: 0;
+    font-size: 13px;
+    flex-wrap: wrap;
+}
+#topbar .site-label {
+    font-weight: 600;
+    color: #e94560;
+    margin-right: 4px;
+}
+#statusBadge {
+    padding: 2px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    background: #444;
+    color: #ccc;
+}
+#statusBadge.starting  { background: #5c5e00; color: #ffd700; }
+#statusBadge.ready     { background: #145214; color: #4dff4d; }
+#statusBadge.error     { background: #6b0000; color: #ff6b6b; }
+#urlBar {
+    flex: 1;
+    min-width: 200px;
+    background: #0d2137;
+    border: 1px solid #1a4a7a;
+    border-radius: 4px;
+    padding: 4px 10px;
+    color: #aac8e8;
+    font-size: 12px;
+    font-family: monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ---- 浏览器视图区域 ---- */
+#viewWrap {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+    background: #111;
+}
+#viewArea {
+    position: relative;
+    /* 大小由 JS 动态设置 */
+    flex-shrink: 0;
+    cursor: crosshair;
+}
+#screenshot {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: fill;
+    pointer-events: none;
+    image-rendering: auto;
+}
+#overlay {
+    position: absolute;
+    inset: 0;
+    cursor: crosshair;
+}
+/* 加载占位 */
+#loadingMask {
+    position: absolute;
+    inset: 0;
+    background: #1a1a2e;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    font-size: 14px;
+    color: #667;
+    z-index: 10;
+}
+.spinner {
+    width: 40px; height: 40px;
+    border: 4px solid #333;
+    border-top-color: #e94560;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- 底部工具栏 ---- */
+#toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    background: #16213e;
+    border-top: 1px solid #0f3460;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+.tbtn {
+    padding: 6px 14px;
+    border: none;
+    border-radius: 5px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity .15s;
+    white-space: nowrap;
+}
+.tbtn:hover { opacity: .85; }
+.tbtn:disabled { opacity: .4; cursor: not-allowed; }
+.tbtn-kbd { background: #0f3460; color: #e0e0e0; }
+.tbtn-kbd.active { background: #4a2f00; color: #ffd700; }
+.tbtn-nav { background: #0f3460; color: #e0e0e0; }
+.tbtn-extract { background: #1a6b1a; color: #fff; }
+.tbtn-close { background: #6b1a1a; color: #fff; margin-left: auto; }
+#navInput {
+    flex: 1;
+    min-width: 150px;
+    max-width: 360px;
+    background: #0d2137;
+    border: 1px solid #1a4a7a;
+    border-radius: 4px;
+    padding: 5px 10px;
+    color: #aac8e8;
+    font-size: 12px;
+}
+#navInput::placeholder { color: #446; }
+#kbdHint {
+    font-size: 11px;
+    color: #ffd700;
+    margin-left: 4px;
+    display: none;
+}
+#kbdHint.visible { display: inline; }
+
+/* ---- Toast ---- */
+#toast {
+    position: fixed;
+    bottom: 60px; left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: rgba(0,0,0,.8);
+    color: #fff;
+    padding: 8px 18px;
+    border-radius: 20px;
+    font-size: 13px;
+    opacity: 0;
+    transition: all .3s;
+    pointer-events: none;
+    z-index: 999;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<!-- 顶部状态栏 -->
+<div id="topbar">
+    <span class="site-label" id="siteLabel">加载中...</span>
+    <span id="statusBadge" class="starting">启动中</span>
+    <div id="urlBar">⏳ 浏览器启动中，请稍候...</div>
+</div>
+
+<!-- 浏览器截图区域 -->
+<div id="viewWrap">
+    <div id="viewArea">
+        <img id="screenshot" src="" alt="browser" draggable="false">
+        <div id="overlay"></div>
+        <div id="loadingMask">
+            <div class="spinner"></div>
+            <div id="loadingText">正在启动浏览器并加载登录页...</div>
+        </div>
+    </div>
+</div>
+
+<!-- 底部工具栏 -->
+<div id="toolbar">
+    <button class="tbtn tbtn-kbd" id="kbdBtn" onclick="toggleKbd()">⌨️ 键盘输入</button>
+    <span id="kbdHint">所有按键已发送到浏览器</span>
+    <input id="pasteInput" type="text" placeholder="在此输入/粘贴文本，按 Enter 发送到浏览器" title="在此粘贴文字后按 Enter，文字将被发送到远程浏览器（无需开启键盘输入模式）" style="flex:1;min-width:150px;max-width:420px;background:#0d2137;border:1px solid #1a4a7a;border-radius:4px;padding:5px 10px;color:#aac8e8;font-size:12px;">
+    <button class="tbtn tbtn-nav" onclick="sendPasteInput()">发送</button>
+    <input id="navInput" type="text" placeholder="输入 URL 跳转">
+    <button class="tbtn tbtn-nav" onclick="doNav()">跳转</button>
+    <button class="tbtn tbtn-extract" id="extractBtn" disabled onclick="extractCookie()">✅ 提取Cookie</button>
+    <button class="tbtn tbtn-close" onclick="doClose()">✖ 关闭</button>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+const BROWSER_W = 1280, BROWSER_H = 720;
+const params = new URLSearchParams(location.search);
+const MODULE   = params.get('module') || '';
+const TARGET_ID = params.get('targetId') || '';   // 父页面传入的标识，用于 postMessage
+
+let sessionId = null;
+let pollTimer = null;
+let kbdActive = false;
+let isDragging = false;
+let lastImgData = null;
+
+// ---- 初始化 ----
+document.getElementById('siteLabel').textContent = `获取 Cookie — ${MODULE}`;
+
+(async function init() {
+    try {
+        const resp = await apiFetch('/api/fetch-cookie/start', {
+            method: 'POST',
+            body: { module: MODULE }
+        });
+        if (resp.status !== 'success') {
+            setStatus('error', resp.message || '启动失败');
+            document.getElementById('loadingText').textContent = '启动失败: ' + (resp.message || '');
+            return;
+        }
+        sessionId = resp.session_id;
+        startPoll();
+    } catch (e) {
+        setStatus('error', e.message);
+        document.getElementById('loadingText').textContent = '网络错误: ' + e.message;
+    }
+})();
+
+// ---- 截图轮询 ----
+function startPoll() {
+    pollTimer = setInterval(doPoll, 500);
+}
+
+async function doPoll() {
+    if (!sessionId) return;
+
+    // 检查会话状态
+    const status = await apiFetch(`/api/fetch-cookie/${sessionId}/status`).catch(() => null);
+    if (status) {
+        updateStatusBadge(status.session_status);
+        if (status.current_url) updateUrlBar(status.current_url);
+        if (status.session_status === 'error') {
+            document.getElementById('loadingText').textContent = '错误: ' + (status.error_message || '未知错误');
+            clearInterval(pollTimer);
+            return;
+        }
+        if (status.session_status === 'ready') {
+            document.getElementById('loadingMask').style.display = 'none';
+            document.getElementById('extractBtn').disabled = false;
+        }
+    }
+
+    // 刷新截图（直接设置 img src 利用浏览器请求）
+    if (status && status.session_status === 'ready') {
+        const img = document.getElementById('screenshot');
+        const newSrc = `/api/fetch-cookie/${sessionId}/screenshot?t=${Date.now()}`;
+        img.src = newSrc;
+    }
+}
+
+// ---- 截图区域自适应 ----
+function resizeView() {
+    const wrap = document.getElementById('viewWrap');
+    const area = document.getElementById('viewArea');
+    const ww = wrap.clientWidth, wh = wrap.clientHeight;
+    const scale = Math.min(ww / BROWSER_W, wh / BROWSER_H);
+    const w = Math.floor(BROWSER_W * scale);
+    const h = Math.floor(BROWSER_H * scale);
+    area.style.width  = w + 'px';
+    area.style.height = h + 'px';
+}
+window.addEventListener('resize', resizeView);
+resizeView();
+
+// ---- 鼠标事件转发 ----
+const overlay = document.getElementById('overlay');
+
+function toViewCoords(e) {
+    const rect = overlay.getBoundingClientRect();
+    return {
+        x: (e.clientX - rect.left) / rect.width  * BROWSER_W,
+        y: (e.clientY - rect.top)  / rect.height * BROWSER_H
+    };
+}
+
+async function sendAction(type, extra = {}) {
+    if (!sessionId) return;
+    await apiFetch(`/api/fetch-cookie/${sessionId}/action`, {
+        method: 'POST',
+        body: { type, ...extra }
+    }).catch(() => {});
+}
+
+overlay.addEventListener('click', async (e) => {
+    if (isDragging) return;
+    const { x, y } = toViewCoords(e);
+    await sendAction('click', { x, y });
+    setTimeout(doPoll, 150);
+});
+
+overlay.addEventListener('dblclick', async (e) => {
+    const { x, y } = toViewCoords(e);
+    await sendAction('dblclick', { x, y });
+    setTimeout(doPoll, 150);
+});
+
+// 拖拽支持（滑块验证码）
+// 原则：移动超过 DRAG_THRESHOLD 才认为是拖拽；未触发拖拽前不发送 mousedown，
+// 让 click 事件用 page.mouse.click() 完成点击，避免两者相互干扰。
+const DRAG_THRESHOLD = 10; // 浏览器坐标系下，超过此像素距离才触发拖拽
+let dragStartPos = null;
+let dragActivated = false; // 是否已激活拖拽（发送过 mousedown）
+
+overlay.addEventListener('mousedown', async (e) => {
+    isDragging = false;
+    dragActivated = false;
+    const { x, y } = toViewCoords(e);
+    dragStartPos = { x, y };
+    // 注意：此处不立即发送 mousedown，等确认是拖拽后再发
+});
+
+overlay.addEventListener('mousemove', async (e) => {
+    if (!dragStartPos) return;
+    const { x, y } = toViewCoords(e);
+    const dx = x - dragStartPos.x, dy = y - dragStartPos.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > DRAG_THRESHOLD) {
+        if (!dragActivated) {
+            // 超过阈值才发送 mousedown（延迟发）
+            dragActivated = true;
+            isDragging = true;
+            await sendAction('mousedown', { x: dragStartPos.x, y: dragStartPos.y });
+        }
+        await sendAction('mousemove', { x, y });
+    }
+});
+
+overlay.addEventListener('mouseup', async (e) => {
+    const { x, y } = toViewCoords(e);
+    if (dragActivated) {
+        await sendAction('mouseup', { x, y });
+        setTimeout(doPoll, 200);
+    }
+    dragStartPos = null;
+    dragActivated = false;
+    setTimeout(() => { isDragging = false; }, 50);
+});
+
+overlay.addEventListener('wheel', async (e) => {
+    e.preventDefault();
+    const { x, y } = toViewCoords(e);
+    await sendAction('scroll', { x, y, delta_x: e.deltaX, delta_y: e.deltaY });
+    setTimeout(doPoll, 150);
+}, { passive: false });
+
+// 右键菜单禁止（避免误触浏览器菜单）
+overlay.addEventListener('contextmenu', e => e.preventDefault());
+
+// ---- 键盘输入 ----
+const CTRL_KEYS = new Set([
+    'Enter', 'Tab', 'Backspace', 'Delete', 'Escape',
+    'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+    'Home', 'End', 'PageUp', 'PageDown', 'Insert',
+    'F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12'
+]);
+
+document.addEventListener('keydown', async (e) => {
+    if (!kbdActive || !sessionId) return;
+    // 允许 F5 / Ctrl+R 刷新本页
+    if (e.key === 'F5' || (e.ctrlKey && e.key === 'r')) return;
+    // 允许 Ctrl+C / Ctrl+X 正常复制（截图是图片，复制无意义但不应拦截）
+    if (e.ctrlKey && (e.key === 'c' || e.key === 'x')) return;
+    // Ctrl+V：读取本地剪贴板，以 type 动作发到远程浏览器
+    if (e.ctrlKey && e.key === 'v') {
+        e.preventDefault();
+        try {
+            const text = await navigator.clipboard.readText();
+            if (text) {
+                await sendAction('type', { text });
+                setTimeout(doPoll, 150);
+                toast(`粘贴了 ${text.length} 个字符`);
+            }
+        } catch {
+            toast('⚠️ 无法读取剪贴板（请确保已授权）');
+        }
+        return;
+    }
+    e.preventDefault();
+    if (CTRL_KEYS.has(e.key)) {
+        let k = e.key;
+        if (e.ctrlKey)  k = 'Control+'  + k;
+        if (e.shiftKey) k = 'Shift+'    + k;
+        if (e.altKey)   k = 'Alt+'      + k;
+        await sendAction('key', { key: k });
+    } else if (e.key.length === 1) {
+        await sendAction('type', { text: e.key });
+    }
+    setTimeout(doPoll, 120);
+});
+
+function toggleKbd() {
+    kbdActive = !kbdActive;
+    const btn  = document.getElementById('kbdBtn');
+    const hint = document.getElementById('kbdHint');
+    btn.classList.toggle('active', kbdActive);
+    btn.textContent = kbdActive ? '⌨️ 键盘已激活' : '⌨️ 键盘输入';
+    hint.classList.toggle('visible', kbdActive);
+    // 激活时把焦点移离所有 input，避免和 navInput 冲突
+    if (kbdActive) document.activeElement?.blur();
+    toast(kbdActive ? '键盘已接入浏览器' : '键盘已断开');
+}
+
+// ---- 工具栏文本发送（粘贴备用方案）----
+async function sendPasteInput() {
+    const input = document.getElementById('pasteInput');
+    const text = input.value;
+    if (!text || !sessionId) return;
+    await sendAction('type', { text });
+    setTimeout(doPoll, 150);
+    toast(`已发送 ${text.length} 个字符`);
+    input.value = '';
+    input.focus();
+}
+document.getElementById('pasteInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); sendPasteInput(); }
+    e.stopPropagation(); // 阻止冒泡到全局键盘监听
+});
+
+// ---- 导航 ----
+async function doNav() {
+    let url = document.getElementById('navInput').value.trim();
+    if (!url) return;
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    await sendAction('goto', { url });
+    setTimeout(doPoll, 800);
+    toast('正在跳转...');
+}
+document.getElementById('navInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doNav();
+    e.stopPropagation(); // 阻止冒泡到全局键盘监听
+});
+
+// ---- 提取 Cookie ----
+async function extractCookie() {
+    if (!sessionId) return;
+    document.getElementById('extractBtn').disabled = true;
+    toast('正在提取 Cookie...');
+    try {
+        const resp = await apiFetch(`/api/fetch-cookie/${sessionId}/extract`, { method: 'POST' });
+        if (resp.status === 'success' && resp.cookie) {
+            sessionId = null;
+            clearInterval(pollTimer);
+            toast('✅ Cookie 提取成功！正在回填...');
+            // 通知父页面
+            if (window.opener && !window.opener.closed) {
+                window.opener.postMessage({
+                    type: 'fetchedCookie',
+                    cookie: resp.cookie,
+                    targetId: TARGET_ID
+                }, '*');
+            }
+            setTimeout(() => window.close(), 1200);
+        } else {
+            toast('⚠️ ' + (resp.message || '未获取到Cookie，请确认已成功登录'));
+            document.getElementById('extractBtn').disabled = false;
+        }
+    } catch (e) {
+        toast('❌ 提取失败: ' + e.message);
+        document.getElementById('extractBtn').disabled = false;
+    }
+}
+
+// ---- 关闭 ----
+async function doClose() {
+    clearInterval(pollTimer);
+    if (sessionId) {
+        await apiFetch(`/api/fetch-cookie/${sessionId}/close`, { method: 'POST' }).catch(() => {});
+        sessionId = null;
+    }
+    window.close();
+}
+
+window.addEventListener('beforeunload', () => {
+    if (sessionId) {
+        navigator.sendBeacon(`/api/fetch-cookie/${sessionId}/close`);
+    }
+});
+
+// ---- 状态显示 ----
+function setStatus(status, text) {
+    const el = document.getElementById('statusBadge');
+    el.className = status;
+    el.textContent = { starting:'启动中', ready:'就绪', error:'错误', closed:'已关闭' }[status] || status;
+    if (text) el.title = text;
+}
+
+function updateStatusBadge(s) { setStatus(s); }
+
+function updateUrlBar(url) {
+    document.getElementById('urlBar').textContent = url;
+    document.getElementById('urlBar').title = url;
+}
+
+// ---- Toast ----
+let toastTimer;
+function toast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// ---- fetch 封装 ----
+async function apiFetch(url, opts = {}) {
+    const res = await fetch(url, {
+        method: opts.method || 'GET',
+        headers: opts.body ? { 'Content-Type': 'application/json' } : {},
+        credentials: 'include',
+        body: opts.body ? JSON.stringify(opts.body) : undefined
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+}
+</script>
+</body>
+</html>

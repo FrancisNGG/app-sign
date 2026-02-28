@@ -249,79 +249,6 @@ def refresh_cookie_with_playwright(site, config):
         }
 
 
-def sync_with_cookiecloud(site, config):
-    """
-    使用CookieCloud同步Cookie，带冲突保护
-    
-    Args:
-        site: 站点配置
-        config: 全局配置
-        
-    Returns:
-        dict: {
-            'success': bool,
-            'message': str,
-            'skipped': bool  # 是否因冲突而跳过更新
-        }
-    """
-    try:
-        from . import cookie_sync
-        from . import cookie_metadata
-        
-        if not cookie_sync.sync_cookies():
-            return {
-                'success': False,
-                'message': 'CookieCloud同步失败',
-                'skipped': False
-            }
-        
-        # 重新加载配置以获取最新Cookie
-        # load_config() 返回 (config_dict, encoding) 元组
-        result = cookie_sync.load_config()
-        if result and result[0]:
-            new_config = result[0]
-            site_name = site.get('name')
-            
-            for s in new_config.get('sites', []):
-                if s.get('name') == site_name:
-                    # 检查冲突：是否应该跳过这次更新
-                    existing_metadata = s.get('cookie_metadata', {})
-                    metadata_obj = cookie_metadata.CookieMetadata(existing_metadata)
-                    
-                    if metadata_obj.should_skip_cookiecloud_update():
-                        # 跳过更新，保护现有更新的 Cookie
-                        return {
-                            'success': False,
-                            'message': f'CookieCloud同步被跳过：现有Cookie更新于{metadata_obj.last_updated}，来源{metadata_obj.source}',
-                            'skipped': True
-                        }
-                    
-                    # 允许更新
-                    site['cookie'] = s.get('cookie', '')
-                    
-                    # 更新元数据标记为 cookiecloud 来源
-                    new_metadata = cookie_metadata.CookieMetadata.create_from_cookiecloud(valid_hours=24.0)
-                    site['cookie_metadata'] = new_metadata.to_dict()
-                    
-                    return {
-                        'success': True,
-                        'message': 'CookieCloud同步成功',
-                        'skipped': False
-                    }
-            
-            return {
-                'success': False,
-                'message': '重新加载配置失败',
-                'skipped': False
-            }
-    
-    except Exception as e:
-        return {
-            'success': False,
-            'message': f'CookieCloud同步异常: {str(e)}',
-            'skipped': False
-        }
-
 
 def verify_cookie_validity(site, config):
     """
@@ -548,75 +475,9 @@ def keepalive_task(site, config):
         print(f"  状态: ❌ Playwright刷新失败")
         print(f"  原因: {playwright_result['message']}")
         steps.append(f"Playwright刷新失败: {playwright_result['message']}")
-        
-        # ==================== 步骤3.5: 尝试CookieCloud同步 ====================
-        print(f"\n[步骤3.5] 尝试使用CookieCloud同步Cookie")
-        sync_result = sync_with_cookiecloud(site, config)
-        
-        if sync_result['success']:
-            print(f"  状态: ✅ CookieCloud同步成功")
-            print(f"  消息: {sync_result['message']}")
-            
-            cookie_raw = site.get('cookie', '')
-            cookie_dict = parse_cookie_string(cookie_raw)
-            next_exec_time = calculate_next_refresh_time(cookie_dict)
-            
-            steps.append(f"CookieCloud同步成功")
-            steps.append(f"下次执行时间: {next_exec_time.strftime('%H:%M:%S')}")
-            
-            # 验证同步后的Cookie
-            print(f"\n[步骤4] 验证同步后的Cookie有效性")
-            verify_result = verify_cookie_validity(site, config)
-            
-            if verify_result['valid']:
-                print(f"  状态: ✅ Cookie有效")
-                print(f"  HTTP: {verify_result['status_code']}")
-                steps.append("同步后的Cookie验证成功")
-                
-                # 保存同步后的Cookie和元数据到config
-                try:
-                    from . import cookie_sync as cs
-                    
-                    config_result = cs.load_config()
-                    if config_result and config_result[0]:
-                        saved_config, encoding = config_result
-                        for s in saved_config.get('sites', []):
-                            if s.get('name') == name:
-                                s['cookie'] = cookie_raw
-                                # Cookie 来源已被标记为 cookiecloud（在 sync_with_cookiecloud 中）
-                                break
-                        cs.save_config(saved_config, encoding=encoding)
-                        print(f"  已保存到config")
-                except Exception as e:
-                    print(f"  保存出错: {e}")
-                
-                print(f"\n{'='*60}")
-                print(f"[成功] {name} Cookie保活成功")
-                print(f"  下次执行: {next_exec_time.strftime('%H:%M:%S')}")
-                print(f"{'='*60}\n")
-                
-                return {
-                    'success': True,
-                    'next_exec_time': next_exec_time,
-                    'steps': steps,
-                    'message': 'Cookie保活成功（CookieCloud同步）'
-                }
-            else:
-                print(f"  状态: ❌ Cookie仍无效")
-                print(f"  HTTP: {verify_result['status_code']}")
-                steps.append(f"同步后验证失败: {verify_result['message']}")
-        elif sync_result.get('skipped'):
-            # CookieCloud 被跳过（做了保护）
-            print(f"  状态: ⏭️ CookieCloud同步被跳过")
-            print(f"  原因: {sync_result['message']}")
-            steps.append(f"CookieCloud被跳过（保护现有Cookie）")
-        else:
-            print(f"  状态: ❌ CookieCloud同步失败")
-            print(f"  原因: {sync_result['message']}")
-            steps.append(f"CookieCloud同步失败: {sync_result['message']}")
     
-    # ==================== 步骤5: 都失败了，加入重试队列 ====================
-    print(f"\n[步骤5] Cookie保活失败，返回重试信息")
+    # ==================== 步骤4: 都失败了，加入重试队列 ====================
+    print(f"\n[步骤4] Cookie保活失败，返回重试信息")
     
     # 计算1小时后的重试时间
     retry_time = datetime.datetime.now() + datetime.timedelta(hours=1)
@@ -626,7 +487,7 @@ def keepalive_task(site, config):
     print(f"  建议: 检查CookieCloud配置或手动在浏览器中访问论坛")
     
     steps.append(f"保活失败，{retry_time.strftime('%H:%M:%S')}后重试")
-    steps.append("建议检查CookieCloud配置")
+    steps.append("建议手动在浏览器中访问站点重新登录")
     
     print(f"\n{'='*60}")
     print(f"[失败] {name} Cookie保活失败，已加入重试队列")

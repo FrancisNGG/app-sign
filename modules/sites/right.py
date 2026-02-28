@@ -4,11 +4,12 @@
 依赖CookieCloud同步浏览器Cookie（包含5秒盾验证Cookie）
 Cookie保活由 modules/cookie_keepalive.py 独立管理
 """
+import asyncio
 import requests
 import re
 import time
 from urllib.parse import urljoin
-from . import safe_print, get_user_agent
+from .. import safe_print, get_user_agent
 
 
 def _is_login_required(text):
@@ -68,14 +69,16 @@ def sign_in(site, config, notify_func):
         session.cookies.update(cookies)
         session.headers.update({"User-Agent": ua})
         
-        # 1. 先访问首页保活Cookie
+        # 1. 先访问首页保活Cookie（确保 base_url 有尾斜杠，避免 urljoin 截路径）
+        _base = base_url.rstrip('/') + '/'
         safe_print(f"[{name}] 刷新会话...")
-        session.get(base_url, timeout=15, allow_redirects=True)
+        session.get(_base, timeout=15, allow_redirects=True)
         import time
         time.sleep(1)
         
         # 2. 重新访问获取 formhash
-        res = session.get(base_url, timeout=20, allow_redirects=True)
+        _base = base_url.rstrip('/') + '/'
+        res = session.get(_base, timeout=20, allow_redirects=True)
         html = res.text
         
         # 提取 formhash（兼容 URL 参数与隐藏字段两种格式）
@@ -103,7 +106,9 @@ def sign_in(site, config, notify_func):
         time.sleep(1)
         
         # 3. 执行签到
-        sign_url = urljoin(base_url, "plugin.php?id=erling_qd:action&action=sign&inajax=1")
+        # 确保 base_url 有尾斜杠，否则 urljoin 会截掉最后一段路径
+        _base = base_url.rstrip('/') + '/'
+        sign_url = urljoin(_base, "plugin.php?id=erling_qd:action&action=sign&inajax=1")
         data = {
             "formhash": formhash,
             "qdxq": "kx",
@@ -113,7 +118,7 @@ def sign_in(site, config, notify_func):
         
         headers = {
             "User-Agent": ua,
-            "Referer": base_url,
+            "Referer": _base,
             "X-Requested-With": "XMLHttpRequest"
         }
         
@@ -248,3 +253,60 @@ def sign_in(site, config, notify_func):
         safe_print(f"[{name}] ✗ 运行出错: {e}")
         notify_func(config, name, f"签到失败: {str(e)}")
         return False
+
+
+# ==================== 异步API适配函数 ====================
+async def sign(base_url, cookies, **kwargs):
+    """
+    异步签到函数 - 用于Web API调用
+    
+    Args:
+        base_url: 网站URL
+        cookies: Cookie字符串
+        **kwargs: 其他参数
+        
+    Returns:
+        str: 签到结果消息
+    """
+    if not cookies:
+        return "签到失败：缺少Cookie"
+    
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            _sign_sync,
+            cookies,
+            base_url
+        )
+        return result
+        
+    except Exception as e:
+        return f"签到失败：{str(e)}"
+
+
+def _sign_sync(cookies, base_url):
+    """同步签到实现"""
+    try:
+        headers = {
+            'User-Agent': get_user_agent(),
+            'Referer': base_url,
+            'Cookie': cookies
+        }
+        
+        session = requests.Session()
+        session.headers.update(headers)
+        
+        # 访问签到页面
+        sign_url = urljoin(base_url, '/home.php?mod=task&do=daylogin')
+        resp = session.get(sign_url, timeout=10, allow_redirects=True)
+        
+        if resp.status_code == 200 and "success" in resp.text.lower():
+            return "签到成功"
+        elif "已签到" in resp.text or "has signed in" in resp.text.lower():
+            return "今日已签到"
+        else:
+            return "签到失败"
+            
+    except Exception as e:
+        return f"签到异常：{str(e)}"

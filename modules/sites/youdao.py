@@ -2,9 +2,10 @@
 """
 有道云笔记签到模块
 """
+import asyncio
 import re
 import requests
-from . import safe_print, get_user_agent
+from .. import safe_print, get_user_agent
 
 
 def sign_in(site, config, notify_func):
@@ -140,3 +141,62 @@ def sign_in(site, config, notify_func):
         safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return False
+
+
+# ==================== 异步API适配函数 ====================
+async def sign(base_url, cookies, **kwargs):
+    """
+    异步签到函数 - 用于Web API调用
+    
+    Args:
+        base_url: 网站URL
+        cookies: Cookie字符串
+        **kwargs: 其他参数
+        
+    Returns:
+        str: 签到结果消息
+    """
+    if not cookies:
+        return "签到失败：缺少Cookie"
+    
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            _sign_sync,
+            cookies,
+            base_url
+        )
+        return result
+        
+    except Exception as e:
+        return f"签到失败：{str(e)}"
+
+
+def _sign_sync(cookies, base_url):
+    """同步签到实现"""
+    try:
+        headers = {
+            'User-Agent': get_user_agent(),
+            'Referer': base_url,
+            'Cookie': cookies
+        }
+        
+        session = requests.Session()
+        session.headers.update(headers)
+        
+        # 签到接口
+        sign_url = f'{base_url}user/checkin'
+        resp = session.post(sign_url, timeout=10)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('ret') == 0:
+                return f"签到成功：{data.get('msg', '签到完成')}"
+            else:
+                return f"签到失败：{data.get('msg', '失败')}"
+        else:
+            return f"签到失败：HTTP {resp.status_code}"
+            
+    except Exception as e:
+        return f"签到异常：{str(e)}"

@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>添加网站 - App Sign v2.0</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #999;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px 15px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .form-group input::placeholder {
+            color: #ccc;
+        }
+
+        .button-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 30px;
+        }
+
+        button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-login {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-login:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-login:active {
+            transform: translateY(0);
+        }
+
+        .btn-cancel {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-cancel:hover {
+            background: #e0e0e0;
+        }
+
+        .btn-login:disabled,
+        .btn-cancel:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* 进度提示 */
+        .progress-message {
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .progress-message.info {
+            background: #e3f2fd;
+            color: #1976d2;
+            border-left: 4px solid #1976d2;
+        }
+
+        .progress-message.success {
+            background: #e8f5e9;
+            color: #388e3c;
+            border-left: 4px solid #388e3c;
+        }
+
+        .progress-message.error {
+            background: #ffebee;
+            color: #c62828;
+            border-left: 4px solid #c62828;
+        }
+
+        .progress-message.show {
+            display: block;
+        }
+
+        /* 加载状态 */
+        .spinner {
+            display: inline-block;
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: currentColor;
+            margin-left: 4px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: translateY(0);
+            }
+            50% {
+                transform: translateY(-10px);
+            }
+            100% {
+                transform: translateY(0);
+            }
+        }
+
+        .info-text {
+            font-size: 12px;
+            color: #999;
+            margin-top: 5px;
+        }
+
+        /* 认证方式选择 */
+        .auth-type-selector {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 25px;
+        }
+
+        .auth-type-option {
+            padding: 15px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.3s ease;
+            background: #fff;
+        }
+
+        .auth-type-option:hover {
+            border-color: #667eea;
+            background: #f5f7ff;
+        }
+
+        .auth-type-option input[type="radio"] {
+            display: none;
+        }
+
+        .auth-type-option input[type="radio"]:checked + label {
+            color: #667eea;
+            font-weight: bold;
+        }
+
+        .auth-type-option input[type="radio"]:checked ~ * {
+            border-color: #667eea;
+        }
+
+        .auth-type-option.selected {
+            border-color: #667eea;
+            background: #f5f7ff;
+        }
+
+        .auth-type-option label {
+            display: block;
+            font-size: 16px;
+            font-weight: 500;
+            margin-bottom: 5px;
+            cursor: pointer;
+        }
+
+        .auth-type-option .option-desc {
+            font-size: 12px;
+            color: #999;
+        }
+
+        /* 隐藏/显示字段 */
+        .form-section {
+            display: none;
+        }
+
+        .form-section.active {
+            display: block;
+        }
+
+        .cookie-textarea {
+            width: 100%;
+            padding: 12px 15px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: 'Courier New', monospace;
+            min-height: 100px;
+            resize: vertical;
+            transition: all 0.3s ease;
+        }
+
+        .cookie-textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌐 添加新网站</h1>
+            <p>选择认证方式并配置网站</p>
+        </div>
+
+        <div id="progressMessage" class="progress-message"></div>
+
+        <form id="loginForm">
+            <div class="form-group">
+                <label>选择认证方式</label>
+                <div class="auth-type-selector">
+                    <div class="auth-type-option selected" onclick="selectAuthType('cookie')">
+                        <input type="radio" id="authCookie" name="authType" value="cookie" checked>
+                        <label for="authCookie">🔐 Cookie</label>
+                        <div class="option-desc">直接导入Cookie</div>
+                    </div>
+                    <div class="auth-type-option" onclick="selectAuthType('account')">
+                        <input type="radio" id="authAccount" name="authType" value="account">
+                        <label for="authAccount">👤 账号密码</label>
+                        <div class="option-desc">登录获取Cookie</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="siteSelect">选择网站</label>
+                <select id="siteSelect" required>
+                    <option value="">-- 选择要添加的网站 --</option>
+                    <!-- 选项由 loadSiteConfigs() 从 /api/sites/supported 动态加载 -->
+                </select>
+            </div>
+
+            <!-- Cookie认证部分 -->
+            <div id="cookieSection" class="form-section active">
+                <div class="form-group">
+                    <label for="cookieInput">粘贴Cookie</label>
+                    <textarea id="cookieInput" class="cookie-textarea" placeholder="粘贴浏览器开发者工具中的Cookie内容
+或使用CookieCloud扩展同步Cookie
+例如: a_foo=bar; b_baz=qux; ..."></textarea>
+                    <p class="info-text">⚠️ 请确保Cookie有效（通常有效期为30-90天）</p>
+                    <button type="button" onclick="openFetchCookiePopup()" style="
+                        margin-top: 8px;
+                        padding: 7px 16px;
+                        background: linear-gradient(135deg, #667eea, #764ba2);
+                        color: white;
+                        border: none;
+                        border-radius: 6px;
+                        font-size: 13px;
+                        font-weight: 500;
+                        cursor: pointer;
+                        display: flex;
+                        align-items: center;
+                        gap: 6px;
+                    ">
+                        🔑 通过账号密码获取 Cookie
+                    </button>
+                </div>
+
+                <div class="form-group">
+                    <label for="runTime">自动签到时间</label>
+                    <input type="time" id="runTime" value="09:00" required>
+                    <p class="info-text">每天在此时间自动执行签到</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="randomRange">随机偏移（分钟）</label>
+                    <input type="number" id="randomRange" min="0" max="120" value="10">
+                    <p class="info-text">防止同时请求，设置0表示不随机</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="aliases">卡片标签名称</label>
+                    <input type="text" id="aliases" placeholder="例如：恩山无线论坛-lices" required>
+                    <p class="info-text">用于区分同一站点的多个账号，作为卡片标题显示</p>
+                </div>
+
+                <div class="form-group">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <input type="checkbox" id="enabledToggle" checked style="width:18px;height:18px;cursor:pointer;">
+                        <span style="color:#333;font-weight:500;font-size:14px;">启用此站点</span>
+                    </div>
+                    <p class="info-text">禁用后不会自动执行签到</p>
+                </div>
+
+                <div class="form-group">
+                    <label style="font-weight: bold;">重试配置</label>
+                    <div style="padding: 10px; background: #f9f9f9; border-radius: 4px; margin-top: 8px;">
+                        <div style="margin-bottom:10px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <input type="checkbox" id="retryEnabled" checked style="width:18px;height:18px;cursor:pointer;">
+                                <span style="color:#333;font-weight:500;font-size:14px;">启用重试机制</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label for="maxRetries">最大重试次数</label>
+                            <input type="number" id="maxRetries" min="1" max="10" value="3" style="width: 100%; padding: 6px;">
+                        </div>
+                        <div style="margin-top: 8px;">
+                            <label for="retryDelayMinutes">重试延迟（分钟）</label>
+                            <input type="number" id="retryDelayMinutes" min="1" max="60" value="1" style="width: 100%; padding: 6px;">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label style="font-weight: bold;">保活配置</label>
+                    <div style="padding: 10px; background: #f9f9f9; border-radius: 4px; margin-top: 8px;">
+                        <div style="margin-bottom:10px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <input type="checkbox" id="keepaliveEnabled" checked style="width:18px;height:18px;cursor:pointer;">
+                                <span style="color:#333;font-weight:500;font-size:14px;">启用Cookie保活</span>
+                            </div>
+                        </div>
+                        <div style="margin-bottom: 10px;">
+                            <label for="keepaliveMethod">保活方式</label>
+                            <select id="keepaliveMethod" style="width: 100%; padding: 6px;">
+                                <option value="browser_refresh">浏览器刷新</option>
+                                <option value="api_request">API请求</option>
+                                <option value="hybrid">混合模式</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="keepaliveInterval">保活间隔（分钟）</label>
+                            <input type="number" id="keepaliveInterval" min="60" max="10080" value="1440" style="width: 100%; padding: 6px;">
+                            <p class="info-text" style="margin-top: 8px;">1440分钟 = 24小时</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="button-group">
+                    <button type="button" class="btn-login" id="saveCookieBtn" onclick="saveCookie()">保存</button>
+                    <button type="button" class="btn-cancel" onclick="goBack()">返回</button>
+                </div>
+            </div>
+
+            <!-- 账号密码认证部分 -->
+            <div id="accountSection" class="form-section">
+                <div class="form-group">
+                    <label for="username">账号/邮箱</label>
+                    <input type="text" id="username" placeholder="输入你的账号或邮箱">
+                    <p class="info-text">通常是邮箱或用户名</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="password">密码</label>
+                    <input type="password" id="password" placeholder="输入你的密码">
+                    <p class="info-text">每次签到时直接使用账号密码登录，无需手动维护 Cookie</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="runTimeAuth">自动签到时间</label>
+                    <input type="time" id="runTimeAuth" value="09:00" required>
+                    <p class="info-text">每天在此时间自动执行签到</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="randomRangeAuth">随机偏移（分钟）</label>
+                    <input type="number" id="randomRangeAuth" min="0" max="120" value="10">
+                    <p class="info-text">防止同时请求，设置0表示不随机</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="aliasesAccount">卡片标签名称</label>
+                    <input type="text" id="aliasesAccount" placeholder="例如：恩山无线论坛-myaccount" required>
+                    <p class="info-text">用于区分同一站点的多个账号，作为卡片标题显示</p>
+                </div>
+
+                <div class="form-group">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <input type="checkbox" id="enabledToggleAccount" checked style="width:18px;height:18px;cursor:pointer;">
+                        <span style="color:#333;font-weight:500;font-size:14px;">启用此站点</span>
+                    </div>
+                    <p class="info-text">禁用后不会自动执行签到</p>
+                </div>
+
+                <div class="button-group">
+                    <button type="button" class="btn-login" id="loginBtn" onclick="saveAccount()">保存</button>
+                    <button type="button" class="btn-cancel" onclick="goBack()">返回</button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        // 全局变量
+        let supportedSites = {};  // 存储从API获取的站点信息
+
+        // 选择认证方式
+        function selectAuthType(type) {
+            // 更新单选按钮
+            document.getElementById('authCookie').checked = (type === 'cookie');
+            document.getElementById('authAccount').checked = (type === 'account');
+
+            // 更新UI样式
+            document.querySelectorAll('.auth-type-option').forEach((opt, idx) => {
+                if ((idx === 0 && type === 'cookie') || (idx === 1 && type === 'account')) {
+                    opt.classList.add('selected');
+                } else {
+                    opt.classList.remove('selected');
+                }
+            });
+
+            // 切换表单部分显示
+            document.getElementById('cookieSection').classList.toggle('active', type === 'cookie');
+            document.getElementById('accountSection').classList.toggle('active', type === 'account');
+
+            // 清空输入框
+            document.getElementById('cookieInput').value = '';
+            document.getElementById('username').value = '';
+            document.getElementById('password').value = '';
+        }
+
+        // 保存账号密码模式的站点配置
+        async function saveAccount() {
+            const siteSelect = document.getElementById('siteSelect');
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value.trim();
+            const runTime = document.getElementById('runTimeAuth').value;
+            const randomRange = parseInt(document.getElementById('randomRangeAuth').value) || 0;
+            const aliases = document.getElementById('aliasesAccount').value.trim();
+            const enabled = document.getElementById('enabledToggleAccount').checked;
+
+            if (!siteSelect.value) { showMessage('请选择网站', 'error'); return; }
+            if (!username)          { showMessage('请输入账号', 'error'); return; }
+            if (!password)          { showMessage('请输入密码', 'error'); return; }
+            if (!runTime)           { showMessage('请设置自动签到时间', 'error'); return; }
+            if (!aliases)           { showMessage('请输入卡片标签名称', 'error'); return; }
+
+            document.getElementById('loginBtn').disabled = true;
+            showMessage('正在保存配置...', 'info');
+            try {
+                const response = await fetch('/api/sites/save-cookie', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        module: siteSelect.value,
+                        aliases,
+                        cookie: '',
+                        username,
+                        password,
+                        auth_type: 'account',
+                        run_time: runTime + ':00',
+                        random_range: randomRange,
+                        enabled,
+                        retry: { enabled: true, max_retries: 3, retry_delay_minutes: 1 }
+                    })
+                });
+                const data = await response.json();
+                if (data.status === 'success') {
+                    showMessage('✓ 配置保存成功！页面将自动返回...', 'success');
+                    setTimeout(() => { window.location.href = '/dashboard'; }, 1500);
+                } else {
+                    showMessage(`保存失败: ${data.message}`, 'error');
+                    document.getElementById('loginBtn').disabled = false;
+                }
+            } catch (error) {
+                showMessage(`错误: ${error.message}`, 'error');
+                document.getElementById('loginBtn').disabled = false;
+            }
+        }
+
+        // 保存Cookie
+        async function saveCookie() {
+            const siteSelect = document.getElementById('siteSelect');
+            const cookieInput = document.getElementById('cookieInput');
+            const runTime = document.getElementById('runTime').value;
+            const randomRange = parseInt(document.getElementById('randomRange').value) || 0;
+            
+            // 新增参数
+            const aliases = document.getElementById('aliases').value.trim();
+            const enabled = document.getElementById('enabledToggle').checked;
+            const retryEnabled = document.getElementById('retryEnabled').checked;
+            const maxRetries = parseInt(document.getElementById('maxRetries').value) || 3;
+            const retryDelayMinutes = parseInt(document.getElementById('retryDelayMinutes').value) || 1;
+            const keepaliveEnabled = document.getElementById('keepaliveEnabled').checked;
+            const keepaliveMethod = document.getElementById('keepaliveMethod').value;
+            const keepaliveInterval = parseInt(document.getElementById('keepaliveInterval').value) || 1440;
+
+            if (!siteSelect.value) {
+                showMessage('请选择网站', 'error');
+                return;
+            }
+
+            if (!cookieInput.value.trim()) {
+                showMessage('请输入Cookie', 'error');
+                return;
+            }
+
+            if (!runTime) {
+                showMessage('请设置自动签到时间', 'error');
+                return;
+            }
+
+            if (!aliases) {
+                showMessage('请输入卡片标签名称', 'error');
+                return;
+            }
+
+            document.getElementById('saveCookieBtn').disabled = true;
+            showMessage('正在保存配置...', 'info');
+
+            try {
+                const response = await fetch('/api/sites/save-cookie', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        module: siteSelect.value,
+                        aliases: aliases,
+                        cookie: cookieInput.value.trim(),
+                        run_time: runTime + ':00',  // 转换为 HH:MM:SS 格式
+                        random_range: randomRange,
+                        enabled: enabled,
+                        retry: {
+                            enabled: retryEnabled,
+                            max_retries: maxRetries,
+                            retry_delay_minutes: retryDelayMinutes
+                        },
+                        keepalive: {
+                            enabled: keepaliveEnabled,
+                            method: keepaliveMethod,
+                            interval_minutes: keepaliveInterval
+                        }
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    showMessage('✓ 配置保存成功！页面将自动返回...', 'success');
+                    setTimeout(() => {
+                        window.location.href = '/dashboard';
+                    }, 1500);
+                } else {
+                    showMessage(`保存失败: ${data.message}`, 'error');
+                    document.getElementById('saveCookieBtn').disabled = false;
+                }
+            } catch (error) {
+                console.error('保存配置失败:', error);
+                showMessage(`错误: ${error.message}`, 'error');
+                document.getElementById('saveCookieBtn').disabled = false;
+            }
+        }
+
+        // 加载支持的站点列表
+        async function loadSiteConfigs() {
+            try {
+                // 获取支持的站点列表
+                const response = await fetch('/api/sites/supported', {
+                    credentials: 'include'
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                const siteSelect = document.getElementById('siteSelect');
+
+                // 清空现有选项（保留提示）
+                while (siteSelect.children.length > 1) {
+                    siteSelect.removeChild(siteSelect.lastChild);
+                }
+
+                // 存储支持的站点信息
+                if (data.sites && Array.isArray(data.sites)) {
+                    // 建立module -> site的映射
+                    supportedSites = {};
+                    data.sites.forEach(site => {
+                        supportedSites[site.module] = site;
+                    });
+
+                    // 添加支持的所有站点
+                    data.sites.forEach(site => {
+                        const option = document.createElement('option');
+                        option.value = site.module;
+                        option.textContent = `${site.name}`;
+                        siteSelect.appendChild(option);
+                    });
+
+                    console.log(`✓ 加载了 ${data.sites.length} 个支持的站点`);
+                }
+            } catch (error) {
+                console.error('加载网站列表失败:', error);
+                showMessage('加载站点列表失败，请刷新页面重试', 'error');
+            }
+        }
+
+        // 显示进度消息
+        function showMessage(message, type = 'info') {
+        // 已存在的 showMessage 内容保持不变
+        // 通过账号密码弹窗获取 Cookie
+            const msg = document.getElementById('progressMessage');
+            msg.textContent = message;
+            msg.className = `progress-message ${type} show`;
+
+            if (type === 'error') {
+                setTimeout(() => msg.classList.remove('show'), 5000);
+            }
+        }
+
+        // 表单提交：委托给对应的保存函数
+        document.getElementById('loginForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            if (document.getElementById('authAccount').checked) {
+                saveAccount();
+            } else {
+                saveCookie();
+            }
+        });
+
+        // 返回（始终跳转回 dashboard）
+        function goBack() {
+            window.location.href = '/dashboard';
+        }
+
+        // ESC 键直接返回 dashboard（捕获阶段，确保在原生下拉/输入框消费事件前触发）
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                goBack();
+            }
+        }, true);
+
+        // 获取网站配置
+        function getSiteConfig(module) {
+            // 直接从 API 动态加载的 supportedSites 中查找
+            return supportedSites && supportedSites[module] || null;
+        }
+
+        // 页面加载
+        window.addEventListener('load', () => {
+            // 检查认证
+            fetch('/api/auth-status', { credentials: 'include' })
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.authenticated) {
+                        window.location.href = '/auth';
+                    }
+                })
+                .catch(() => window.location.href = '/auth');
+
+            // 加载网站列表
+            loadSiteConfigs();
+        });
+
+        // ---- 通过账号密码获取 Cookie ----
+        let _fetchCookieHandler = null;
+        function openFetchCookiePopup() {
+            const module = document.getElementById('siteSelect').value;
+            if (!module) {
+                showMessage('请先选择站点', 'error');
+                return;
+            }
+            const url = `/fetch-cookie?module=${encodeURIComponent(module)}&targetId=addSiteCookie`;
+            const popup = window.open(url, 'fetchCookie',
+                'width=1060,height=800,resizable=yes,scrollbars=no');
+            if (!popup) {
+                showMessage('弹窗被浏览器拦截，请允许弹出窗口后重试', 'error');
+                return;
+            }
+            // 移除旧监听，避免重复注册
+            if (_fetchCookieHandler) window.removeEventListener('message', _fetchCookieHandler);
+            _fetchCookieHandler = function(e) {
+                if (!e.data || e.data.type !== 'fetchedCookie') return;
+                if (e.data.targetId && e.data.targetId !== 'addSiteCookie') return;
+                const ta = document.getElementById('cookieInput');
+                if (ta) ta.value = e.data.cookie || '';
+                showMessage('✅ Cookie 已自动填充，请确认后保存', 'success');
+                window.removeEventListener('message', _fetchCookieHandler);
+                _fetchCookieHandler = null;
+            };
+            window.addEventListener('message', _fetchCookieHandler);
+        }
+    </script>
+</body>
+</html>

@@ -3,7 +3,8 @@
 AcFun签到模块
 """
 import requests
-from . import safe_print, get_user_agent
+import asyncio
+from .. import safe_print, get_user_agent
 
 
 def get_balance(session):
@@ -149,3 +150,72 @@ def sign_in(site, config, notify_func):
         safe_print(f"[{name}] {result_msg}")
         notify_func(config, name, result_msg)
         return False
+
+
+# ==================== 异步API适配函数 ====================
+async def sign(base_url, cookies, **kwargs):
+    """
+    异步签到函数 - 用于Web API调用
+    
+    Args:
+        base_url: 网站URL
+        cookies: Cookie字符串
+        **kwargs: 其他参数
+        
+    Returns:
+        str: 签到结果消息
+    """
+    if not cookies:
+        return "签到失败：缺少Cookie"
+    
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'zh-CN,zh;q=0.9',
+            'Referer': 'https://www.acfun.cn/member/',
+            'Cookie': cookies
+        }
+        
+        session = requests.Session()
+        session.headers.update(headers)
+        
+        # 运行在线程中执行（避免阻塞）
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            _sign_sync,
+            session,
+            base_url,
+            headers
+        )
+        
+        return result
+        
+    except Exception as e:
+        return f"签到失败：{str(e)}"
+
+
+def _sign_sync(session, base_url, headers):
+    """同步签到实现"""
+    try:
+        # 访问个人中心页面
+        session.get(f'{base_url}member/', timeout=10)
+        
+        # 调用签到接口
+        sign_url = 'https://www.acfun.cn/rest/pc-direct/user/checkIn'
+        sign_resp = session.post(sign_url, json={}, timeout=10)
+        
+        if sign_resp.status_code == 200:
+            result = sign_resp.json()
+            if result.get('result') == 0:
+                reward = result.get('info', {}).get('reward', '未知奖励')
+                return f"签到成功！获得奖励：{reward}"
+            else:
+                msg = result.get('error_msg', '签到失败')
+                return f"签到失败：{msg}"
+        else:
+            return f"签到失败：HTTP {sign_resp.status_code}"
+            
+    except Exception as e:
+        return f"签到异常：{str(e)}"

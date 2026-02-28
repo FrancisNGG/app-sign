@@ -5,7 +5,7 @@
 import requests
 import time
 from datetime import datetime
-from . import safe_print
+from .. import safe_print
 
 
 def push_bark(bark_config, site_name, result_msg):
@@ -47,7 +47,7 @@ def push_bark(bark_config, site_name, result_msg):
 
     # 失败重试：最多2次（总计3次）
     max_retries = int(bark_config.get('max_retries', 2))
-    retry_delay = float(bark_config.get('retry_delay_seconds', 1.0))
+    retry_delay = int(bark_config.get('retry_delay_seconds', 1))
 
     for attempt in range(max_retries + 1):
         try:
@@ -67,34 +67,42 @@ def push_bark(bark_config, site_name, result_msg):
 def push_notification(config, site_name, result_msg):
     """
     统一推送入口，支持多种推送服务
-    
+
+    config['notify'] 支持两种格式：
+      - 字典格式（当前默认）: {bark: {...}, telegram: {...}}
+      - 列表格式（旧版）:     [{bark: {...}}, {telegram: {...}}]
+
     Args:
         config: 全局配置字典
         site_name: 站点名称
         result_msg: 结果消息
     """
-    # 获取通知配置
-    notify_config = config.get('notify', [])
-    
-    # 如果notify不是列表，返回
-    if not isinstance(notify_config, list):
+    notify_config = config.get('notify', {})
+
+    # 兼容列表格式（旧版）
+    if isinstance(notify_config, list):
+        for notify_item in notify_config:
+            if isinstance(notify_item, dict):
+                bark_cfg = notify_item.get('bark')
+                if isinstance(bark_cfg, dict):
+                    push_bark(bark_cfg, site_name, result_msg)
         return
-    
-    # 遍历所有通知方式
-    for notify_item in notify_config:
-        if isinstance(notify_item, dict):
-            # Bark 推送
-            if 'bark' in notify_item:
-                bark_config = notify_item['bark']
-                if isinstance(bark_config, dict):
-                    push_bark(bark_config, site_name, result_msg)
-            
-            # Telegram 推送（预留）
-            # if 'telegram' in notify_item:
-            #     telegram_config = notify_item['telegram']
-            #     push_telegram(telegram_config, site_name, result_msg)
-            
-            # 企业微信推送（预留）
-            # if 'wechat' in notify_item:
-            #     wechat_config = notify_item['wechat']
-            #     push_wechat(wechat_config, site_name, result_msg)
+
+    # 字典格式（当前默认）
+    if not isinstance(notify_config, dict):
+        return
+
+    # Bark 推送
+    bark_cfg = notify_config.get('bark')
+    if isinstance(bark_cfg, dict):
+        push_bark(bark_cfg, site_name, result_msg)
+
+    # Telegram 推送（预留）
+    # telegram_cfg = notify_config.get('telegram')
+    # if isinstance(telegram_cfg, dict):
+    #     push_telegram(telegram_cfg, site_name, result_msg)
+
+    # 企业微信推送（预留）
+    # wechat_cfg = notify_config.get('wechat')
+    # if isinstance(wechat_cfg, dict):
+    #     push_wechat(wechat_cfg, site_name, result_msg)
