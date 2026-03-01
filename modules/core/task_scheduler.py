@@ -160,16 +160,17 @@ class TaskScheduler:
         
         keepalive_config = site_config.get('keepalive', {})
         
-        # 获上次保活时间
-        last_refresh = keepalive_config.get('last_refresh_time')
+        # 获取上次保活时间（字段名与 config.yaml 保持一致）
+        last_refresh = keepalive_config.get('last_keepalive_time')
         
-        # 计算刷新间隔（小时）
-        check_interval = keepalive_config.get('check_interval_hours', 24)
+        # 计算刷新间隔：config 中存储的是分钟数，转换为小时
+        interval_minutes = keepalive_config.get('interval_minutes', 1440)
+        check_interval_hours = interval_minutes / 60.0
         
         if last_refresh:
             try:
                 last_time = datetime.fromisoformat(last_refresh)
-                scheduled = last_time + timedelta(hours=check_interval)
+                scheduled = last_time + timedelta(hours=check_interval_hours)
             except (ValueError, TypeError):
                 scheduled = now + timedelta(hours=1)
         else:
@@ -286,22 +287,27 @@ class TaskScheduler:
     
     def get_task_statistics(self) -> Dict:
         """获取任务统计信息"""
+        today = datetime.now().date()
         return {
             "pending": len(self.pending_tasks),
             "running": len(self.running_tasks),
+            "running_site_names": [
+                t.site_name for t in self.running_tasks.values()
+                if t.task_type.value == 'sign'
+            ],
             "retry_queue": len(self.retry_queue),
             "completed_today": len([
                 t for t in self.completed_tasks
-                if t.completed_at and t.completed_at.date() == datetime.now().date()
+                if t.completed_at and t.completed_at.date() == today
             ]),
             "success_today": len([
                 t for t in self.completed_tasks
-                if t.completed_at and t.completed_at.date() == datetime.now().date()
+                if t.completed_at and t.completed_at.date() == today
                 and t.status == TaskStatus.SUCCESS
             ]),
             "failed_today": len([
                 t for t in self.completed_tasks
-                if t.completed_at and t.completed_at.date() == datetime.now().date()
+                if t.completed_at and t.completed_at.date() == today
                 and t.status == TaskStatus.FAILED
             ]),
         }

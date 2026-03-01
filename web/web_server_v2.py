@@ -25,6 +25,7 @@ from functools import wraps
 from typing import Optional, Dict
 from flask import Flask, request, jsonify, send_from_directory, redirect, url_for, abort, session
 from flask_cors import CORS
+import bcrypt
 import logging
 from logging.handlers import TimedRotatingFileHandler
 
@@ -123,6 +124,12 @@ global:
 # ==================== Flask应用初始化 ====================
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'app-sign-v2-secret-key')
+# Session 安全配置
+app.config['SESSION_COOKIE_HTTPONLY'] = True      # 禁止 JS 读取 cookie，防止 XSS
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'    # 限制跨站请求携带 cookie，缓解 CSRF
+# SESSION_COOKIE_SECURE 设为 True 时仅 HTTPS 可用；生产环境建议启用
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SECURE_COOKIE', '').lower() in ('1', 'true', 'yes')
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=12)  # session 12 小时后自动过期
 CORS(app)
 
 # 截图流浏览器会话管理器（延迟导入，避免 Playwright 启动过早）
@@ -181,6 +188,9 @@ class AppContext:
         # 保活并发保护：记录当前正在执行保活的站点名，防止同站点并发
         self._running_keepalives: set = set()
         self._running_keepalives_lock = threading.Lock()
+
+        # 签到调度跟踪：记录上次生成任务的日期，用于跨天自动续签
+        self._last_task_generation_date = None
     
     def _record_sign_result(self, site_name: str, success: bool, message: str, error_type: str = None):
         """SignExecutor的结果回调 - 直接记录签到结果"""
@@ -314,29 +324,11 @@ class AppContext:
                         logger.info(f"[KeepAlive] {s_name} 保活成功，更新 Cookie")
                         try:
                             from modules.utils.cookie_metadata import CookieMetadata
-                            from modules.utils.cookie_keepalive import (
-                                parse_cookie_string, analyze_cookie_validity
-                            )
                             import datetime as _dt
-                            # 优先从 cookie 实际时间戳推算有效期
-                            _validity = analyze_cookie_validity(
-                                parse_cookie_string(new_cookie)
-                            )
-                            if _validity.get('max_timestamp', 0) > 0:
-                                _valid_until = _dt.datetime.utcfromtimestamp(
-                                    _validity['max_timestamp']
-                                ).replace(tzinfo=_dt.timezone.utc).isoformat()
-                                _valid_hours = max(_validity.get('remaining_hours', 0), 0)
-                            else:
-                                _valid_hours = ka_interval / 60
-                                _valid_until = None
                             now_utc = _dt.datetime.now(_dt.timezone.utc)
                             metadata = CookieMetadata({
                                 'last_updated': now_utc.isoformat(),
                                 'source': 'playwright',
-                                'valid_until': _valid_until or (
-                                    now_utc + _dt.timedelta(hours=_valid_hours)
-                                ).isoformat(),
                                 'refresh_attempts': 0
                             })
                             cfg2, enc2 = load_config('config/config.yaml')
@@ -389,6 +381,181 @@ class AppContext:
             threading.Thread(target=_do_keepalive, daemon=True,
                              name=f"KA-{site_name}").start()
 
+    # ==================== 签到后台调度线程 ====================
+    def start_sign_scheduler(self):
+        """启动签到后台调度线程（每30秒检查一次）"""
+        def _loop():
+            import time as _time
+            # 启动时立即生成今日任务
+            try:
+                self._generate_todays_sign_tasks()
+            except Exception as e:
+                logger.error(f"[SignScheduler] 初始生成任务失败: {e}")
+            logger.info("[SignScheduler] 签到调度线程已启动")
+            while True:
+                try:
+                    self._run_due_sign_tasks()
+                except Exception as e:
+                    logger.error(f"[SignScheduler] 调度异常: {e}")
+                _time.sleep(30)
+
+        t = threading.Thread(target=_loop, daemon=True, name="SignScheduler")
+        t.start()
+        logger.info("[SignScheduler] 签到调度线程已注册")
+
+    def _generate_todays_sign_tasks(self):
+        """为今日所有启用站点生成签到任务（跳过今日已签到成功的站点）"""
+        import random as _random
+        from modules.utils.cookie_sync import load_config as _load_cfg
+        from modules.core.task_scheduler import Task, TaskType
+        import uuid
+
+        try:
+            full_config, _ = _load_cfg('config/config.yaml')
+        except Exception as e:
+            logger.warning(f"[SignScheduler] 读取配置失败: {e}")
+            return
+
+        sites = full_config.get('sites', []) if full_config else []
+        if not isinstance(sites, list):
+            return
+
+        now = datetime.now()
+        today = now.date()
+        generated = 0
+
+        for site in sites:
+            if not isinstance(site, dict):
+                continue
+            if not site.get('enabled', True):
+                continue
+
+            site_name = site.get('aliases') or site.get('name', '?')
+
+            # 今日已签到成功则跳过
+            last_sign_str = site.get('last_sign_time')
+            if last_sign_str:
+                try:
+                    last_sign = datetime.fromisoformat(last_sign_str)
+                    if last_sign.date() == today and site.get('last_sign_status') == 'success':
+                        logger.debug(f"[SignScheduler] {site_name} 今日已签到成功，跳过")
+                        continue
+                except Exception:
+                    pass
+
+            # 解析 run_time
+            run_time_str = site.get('run_time', '09:00:00')
+            try:
+                run_time = datetime.strptime(run_time_str, '%H:%M:%S').time()
+            except ValueError:
+                run_time = datetime.strptime('09:00:00', '%H:%M:%S').time()
+
+            # 计划时间 = 今天的 run_time + 随机延迟
+            scheduled = datetime.combine(today, run_time)
+            random_range = site.get('random_range', 0)
+            if random_range > 0:
+                scheduled += timedelta(minutes=_random.randint(0, random_range))
+
+            # 如果计划时间已超过1小时，立即补签
+            if scheduled < now - timedelta(hours=1):
+                scheduled = now + timedelta(seconds=5)
+                logger.info(f"[SignScheduler] {site_name} 签到时间已超期，安排立即补签")
+            elif scheduled < now:
+                # 1小时内的轻微超期，延迟2秒执行
+                scheduled = now + timedelta(seconds=2)
+
+            # 避免向 pending 队列重复添加同一站点的签到任务
+            already_pending = any(
+                t.site_name == site_name and t.task_type.value == 'sign'
+                for t in self.task_scheduler.pending_tasks
+            )
+            if already_pending:
+                logger.debug(f"[SignScheduler] {site_name} 已在待执行队列中，跳过")
+                continue
+
+            task = Task(
+                task_id=f"sign_{uuid.uuid4().hex[:8]}",
+                site_name=site_name,
+                task_type=TaskType.SIGN,
+                scheduled_time=scheduled,
+                max_retries=int((site.get('retry') or {}).get('max_retries', 3))
+            )
+            self.task_scheduler.add_pending_tasks([task])
+            generated += 1
+            logger.info(f"[SignScheduler] {site_name} 签到任务已安排 @ {scheduled.strftime('%H:%M:%S')}")
+
+        self._last_task_generation_date = today
+        logger.info(f"[SignScheduler] 共生成 {generated} 个今日签到任务")
+
+    def _run_due_sign_tasks(self):
+        """检查并执行到期的签到任务"""
+        now = datetime.now()
+        today = now.date()
+
+        # 日期变更时重新生成任务（跨天自动续签）
+        if self._last_task_generation_date != today:
+            logger.info("[SignScheduler] 日期已变更，重新生成今日签到任务...")
+            self._generate_todays_sign_tasks()
+            return
+
+        # 获取到期的签到任务（含重试队列）
+        due_tasks = self.task_scheduler.get_executable_tasks(now)
+        retry_tasks = self.task_scheduler.get_executable_retry_tasks(now)
+        all_due = [t for t in (due_tasks + retry_tasks) if t.task_type.value == 'sign']
+
+        for task in all_due:
+            self.task_scheduler.start_task(task)
+
+            def _do_sign(t=task):
+                _sites_cfg = load_sites_config()
+                site_config = _sites_cfg.get(t.site_name)
+                if not site_config:
+                    logger.warning(f"[SignScheduler] {t.site_name} 配置不存在，跳过")
+                    self.task_scheduler.complete_task(t, success=False, message="配置不存在")
+                    return
+
+                retry_cfg = site_config.get('retry', {})
+                retry_enabled = retry_cfg.get('enabled', True)
+                max_attempts = (int(retry_cfg.get('max_retries', 3)) + 1) if retry_enabled else 1
+                retry_delay_min = float(retry_cfg.get('retry_delay_minutes', 1))
+
+                import asyncio as _aio
+                import time as _time
+                last_err = None
+                for attempt in range(1, max_attempts + 1):
+                    if attempt > 1:
+                        logger.info(f"[SignScheduler] {t.site_name} 第{attempt}次重试，等待 {retry_delay_min} 分钟...")
+                        _time.sleep(retry_delay_min * 60)
+                        _fresh = load_sites_config()
+                        site_config = _fresh.get(t.site_name) or site_config
+
+                    new_loop = _aio.new_event_loop()
+                    _aio.set_event_loop(new_loop)
+                    try:
+                        new_loop.run_until_complete(
+                            self.sign_executor.execute_sign(t, site_config)
+                        )
+                        last_err = None
+                        break
+                    except Exception as e:
+                        last_err = e
+                        logger.warning(f"[SignScheduler] {t.site_name} 第{attempt}/{max_attempts}次失败: {e}")
+                    finally:
+                        new_loop.close()
+
+                if last_err is None:
+                    self.task_scheduler.complete_task(t, success=True, message="签到成功")
+                else:
+                    self.task_scheduler.complete_task(t, success=False, message=str(last_err))
+
+            thread = threading.Thread(target=_do_sign, daemon=True,
+                                      name=f"Sign-{task.site_name}")
+            thread.start()
+
+        # 清理超期未执行的任务
+        self.task_scheduler.cleanup_overdue_tasks(now)
+
+
 ctx = AppContext()
 
 
@@ -416,11 +583,16 @@ def get_async_loop():
         return ctx.async_loop
 
 
-def run_async(coro):
-    """在后台事件循环中执行器程"""
+def run_async(coro, timeout=30):
+    """在后台事件循环中执行协程
+    
+    Args:
+        coro: 协程对象
+        timeout: 超时秒数，默认30秒；浏览器相关操作可传入更大值
+    """
     loop = get_async_loop()
     future = asyncio.run_coroutine_threadsafe(coro, loop)
-    return future.result(timeout=30)
+    return future.result(timeout=timeout)
 
 
 def add_log(message: str):
@@ -448,7 +620,7 @@ def load_auth_config() -> dict:
 
 
 def save_auth_config(username: str, password: str) -> bool:
-    """保存Web认证配置"""
+    """保存Web认证配置（password 应已经过 hash_password 处理）"""
     try:
         config, encoding = load_config('config/config.yaml')
         if config is None:
@@ -459,6 +631,37 @@ def save_auth_config(username: str, password: str) -> bool:
         return True
     except Exception as e:
         logger.error(f"保存认证配置失败: {str(e)}")
+        return False
+
+
+def hash_password(plain: str) -> str:
+    """将明文密码哈希为 bcrypt 字符串（用于存入 config.yaml）"""
+    return bcrypt.hashpw(plain.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+
+def verify_password(plain: str, stored: str) -> bool:
+    """
+    验证密码。
+    - stored 是 bcrypt 格式（$2b$/$2a$ 开头）: 做哈希比对
+    - stored 是明文（手动在 config.yaml 中重置）: 直接比对，
+      并自动将明文升级为哈希写回 config，方便忘记密码后重置。
+    """
+    if stored.startswith(('$2b$', '$2a$', '$2y$')):
+        try:
+            return bcrypt.checkpw(plain.encode('utf-8'), stored.encode('utf-8'))
+        except Exception:
+            return False
+    else:
+        # 明文兜底：允许手动在 config.yaml 写明文实现密码重置
+        if plain == stored:
+            # 自动升级：将明文升级为哈希写回 config
+            try:
+                auth = load_auth_config()
+                save_auth_config(auth.get('username', 'admin'), hash_password(plain))
+                logger.info("检测到明文密码，已自动升级为 bcrypt 哈希")
+            except Exception as e:
+                logger.warning(f"密码自动升级失败（不影响登录）: {e}")
+            return True
         return False
 
 
@@ -549,7 +752,7 @@ def auth_login():
             return jsonify({'status': 'error', 'message': '用户名和密码不能为空'}), 400
         
         auth = load_auth_config()
-        if username == auth.get('username') and password == auth.get('password'):
+        if username == auth.get('username') and verify_password(password, auth.get('password', '')):
             session['username'] = username
             return jsonify({'status': 'success', 'message': '登录成功'})
         else:
@@ -800,7 +1003,7 @@ def fetch_cookie_screenshot(session_id):
         return Response(placeholder, mimetype='image/jpeg',
                         headers={'Cache-Control': 'no-store'})
     try:
-        jpeg = run_async(sess.screenshot_jpeg())
+        jpeg = run_async(sess.screenshot_jpeg(), timeout=60)
         if jpeg is None:
             abort(503)
         return Response(jpeg, mimetype='image/jpeg',
@@ -821,7 +1024,7 @@ def fetch_cookie_action(session_id):
     try:
         data = request.get_json() or {}
         action_type = data.pop('type', '')
-        ok = run_async(sess.do_action(action_type, **data))
+        ok = run_async(sess.do_action(action_type, **data), timeout=15)
         return jsonify({'status': 'success' if ok else 'error',
                         'current_url': sess.current_url})
     except Exception as e:
@@ -854,8 +1057,8 @@ def fetch_cookie_extract(session_id):
     if not sess:
         return jsonify({'status': 'error', 'message': '会话不存在'}), 404
     try:
-        cookie_str = run_async(sess.extract_cookies())
-        run_async(sess.close())
+        cookie_str = run_async(sess.extract_cookies(), timeout=60)
+        run_async(sess.close(), timeout=10)
         manager.remove(session_id)
         if cookie_str:
             return jsonify({'status': 'success', 'cookie': cookie_str})
@@ -874,7 +1077,7 @@ def fetch_cookie_close(session_id):
     sess = manager.get(session_id)
     if sess:
         try:
-            run_async(sess.close())
+            run_async(sess.close(), timeout=10)
         except Exception:
             pass
         manager.remove(session_id)
@@ -1004,10 +1207,12 @@ def get_sites():
                 'credential_type': credential_type,
                 'cookie_status': {
                     'has_cookie': has_cookie,
-                    'valid_until': site_cfg.get('cookie_valid_until'),
                 },
                 'keepalive': site_cfg.get('keepalive', {}),
-                'cookie_metadata': site_cfg.get('cookie_metadata'),
+                'cookie_metadata': {
+                    k: v for k, v in (site_cfg.get('cookie_metadata') or {}).items()
+                    if k != 'valid_until'
+                } or None,
             }
             sites_list.append(site_info)
         
@@ -1140,20 +1345,21 @@ def save_cookie():
         if not isinstance(sites, list):
             sites = []
 
-        # 新增前先校验 aliases 全局唯一性（不论模块）
-        for existing_site in sites:
-            if (existing_site.get('aliases') or '').strip() == aliases:
-                return jsonify({
-                    'status': 'error',
-                    'message': f'标签名称 "{aliases}" 已存在，请修改为其他名称'
-                }), 400
-
-        # 查找是否已存在该站点（通过module和aliases组合查找，唯一性已保证不会命中）
+        # 先查找是否已存在同 module+aliases 的站点（更新模式）
         site_index = None
         for idx, site in enumerate(sites):
             if site.get('module') == module and site.get('aliases') == aliases:
                 site_index = idx
                 break
+
+        # 仅新建时才校验 aliases 全局唯一性（更新已有站点时跳过此检查）
+        if site_index is None:
+            for existing_site in sites:
+                if (existing_site.get('aliases') or '').strip() == aliases:
+                    return jsonify({
+                        'status': 'error',
+                        'message': f'标签名称 "{aliases}" 已存在，请修改为其他名称'
+                    }), 400
 
         if site_index is not None:
             # 更新现有站点
@@ -1517,7 +1723,21 @@ def sign_status():
     """获取签到系统状态"""
     try:
         stats = ctx.task_scheduler.get_task_statistics()
-        
+
+        # 用 config.yaml 持久化数据覆盖 success_today，
+        # 避免服务重启后内存记录归零导致显示为 0
+        try:
+            _cfg, _ = load_config('config/config.yaml')
+            today_str = datetime.now().date().isoformat()
+            stats['success_today'] = sum(
+                1 for s in (_cfg or {}).get('sites', [])
+                if isinstance(s, dict)
+                and s.get('last_sign_status') == 'success'
+                and (s.get('last_sign_time') or '')[:10] == today_str
+            )
+        except Exception:
+            pass  # 读取失败则保留内存计数
+
         response = jsonify({
             'status': 'success',
             'task_statistics': stats,
@@ -1552,6 +1772,9 @@ def execute_sign(site_name):
         
         # 在后台线程中执行签到
         def run_sign():
+            from modules.core.task_scheduler import Task, TaskType
+            import uuid, asyncio as aio, time as _time
+            task = None
             try:
                 safe_print(f"\n[run_sign] 开始执行: {site_name}")
 
@@ -1567,8 +1790,15 @@ def execute_sign(site_name):
                 max_attempts = (int(retry_cfg.get('max_retries', 3)) + 1) if retry_enabled else 1
                 retry_delay_min = float(retry_cfg.get('retry_delay_minutes', 1))
 
-                from modules.core.task_scheduler import Task, TaskType
-                import uuid, asyncio as aio, time as _time
+                # 创建任务并注册到调度器（使其出现在 running_site_names）
+                task = Task(
+                    task_id=str(uuid.uuid4()),
+                    site_name=site_name,
+                    task_type=TaskType.SIGN,
+                    scheduled_time=datetime.now(),
+                    max_retries=0   # 重试已在外层循环处理，避免 complete_task 二次入队
+                )
+                ctx.task_scheduler.start_task(task)
 
                 last_err = None
                 for attempt in range(1, max_attempts + 1):
@@ -1579,12 +1809,6 @@ def execute_sign(site_name):
                         _fresh = load_sites_config()
                         site_config = _fresh.get(site_name) or site_config
 
-                    task = Task(
-                        task_id=str(uuid.uuid4()),
-                        site_name=site_name,
-                        task_type=TaskType.SIGN,
-                        scheduled_time=datetime.now()
-                    )
                     new_loop = aio.new_event_loop()
                     aio.set_event_loop(new_loop)
                     try:
@@ -1592,26 +1816,28 @@ def execute_sign(site_name):
                         new_loop.run_until_complete(
                             ctx.sign_executor.execute_sign(task, site_config)
                         )
-                        # execute_sign() 内部已通过 result_recorder 回调记录成功结果
                         safe_print(f"[run_sign] 第 {attempt} 次执行成功")
                         last_err = None
                         break  # 成功，退出重试循环
                     except Exception as attempt_err:
                         last_err = attempt_err
                         safe_print(f"[run_sign] 第 {attempt}/{max_attempts} 次失败: {attempt_err}")
-                        # execute_sign() 内部已记录了本次失败结果，继续重试
                     finally:
                         new_loop.close()
 
-                if last_err is not None:
+                if last_err is None:
+                    ctx.task_scheduler.complete_task(task, success=True, message="签到成功")
+                else:
                     safe_print(f"[run_sign] 全部 {max_attempts} 次均失败，最终错误: {last_err}")
-                    # 最后一次失败已由 execute_sign() 内部记录，无需重复调用
+                    ctx.task_scheduler.complete_task(task, success=False, message=str(last_err))
 
             except Exception as e:
                 error_str = str(e)
                 safe_print(f"[run_sign ERROR] {error_str}")
                 import traceback
                 traceback.print_exc()
+                if task:
+                    ctx.task_scheduler.complete_task(task, success=False, message=error_str)
 
                 # 分析错误类型
                 error_type = 'unknown'
@@ -1800,6 +2026,9 @@ def save_settings():
             config['auth'] = {}
         config['auth']['username'] = auth_username
         if auth_password:
+            # 保存时自动哈希，若已是 bcrypt 格式则不重复哈希
+            if not auth_password.startswith(('$2b$', '$2a$', '$2y$')):
+                auth_password = hash_password(auth_password)
             config['auth']['password'] = auth_password
 
         # 通知设置 — Bark
@@ -1857,6 +2086,9 @@ def start_server(host='0.0.0.0', port=21333, debug=False):
 
         # 启动保活后台调度线程
         ctx.start_keepalive_scheduler()
+
+        # 启动签到后台调度线程
+        ctx.start_sign_scheduler()
         
         app.run(host=host, port=port, debug=debug, threaded=True)
     

@@ -97,16 +97,25 @@ class CredentialManager:
         self.browser_manager = browser_manager
         self.sessions: Dict[str, LoginSession] = {}
         self.browser: Optional[Browser] = None
+        self._playwright_instance = None  # 保存 playwright 实例，防止资源泄露
         
-    async def signup_browser(self):
+    async def init_browser(self):
         """初始化Playwright浏览器"""
-        playwright = await async_playwright().start()
-        self.browser = await playwright.chromium.launch(headless=True)
+        self._playwright_instance = await async_playwright().start()
+        self.browser = await self._playwright_instance.chromium.launch(headless=True)
+
+    # 兼容旧名称
+    async def signup_browser(self):
+        await self.init_browser()
         
     async def cleanup_browser(self):
         """清理浏览器资源"""
         if self.browser:
             await self.browser.close()
+            self.browser = None
+        if self._playwright_instance:
+            await self._playwright_instance.stop()
+            self._playwright_instance = None
     
     async def start_login(
         self,
@@ -133,7 +142,7 @@ class CredentialManager:
             RuntimeError: 浏览器未初始化或启动失败
         """
         if not self.browser:
-            await self.signup_browser()
+            await self.init_browser()
         
         # 创建会话
         session_id = f"sess_{uuid.uuid4().hex[:12]}"

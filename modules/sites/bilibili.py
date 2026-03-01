@@ -2,7 +2,6 @@
 """
 哔哩哔哩签到模块
 """
-import asyncio
 import re
 import time
 import requests

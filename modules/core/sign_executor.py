@@ -25,9 +25,12 @@ class SignExecutionError(Exception):
     pass
 
 
-class ModuleNotFoundError(SignExecutionError):
-    """模块未找到异常"""
+class SignModuleNotFoundError(SignExecutionError):
+    """模块未找到异常（不遮蔽 Python 内建同名异常）"""
     pass
+
+# 向后兼容别名
+ModuleNotFoundError = SignModuleNotFoundError
 
 
 class SignExecutor:
@@ -76,7 +79,7 @@ class SignExecutor:
         try:
             module_name = site_config.get('module')
             if not module_name:
-                raise ModuleNotFoundError(f"网站 {task.site_name} 未配置module")
+                raise SignModuleNotFoundError(f"网站 {task.site_name} 未配置module")
             
             # 加载模块
             sign_module = self._get_module(module_name)
@@ -86,13 +89,13 @@ class SignExecutor:
             if hasattr(sign_module, 'sign_in'):
                 sign_func = getattr(sign_module, 'sign_in')
             else:
-                raise ModuleNotFoundError(
+                raise SignModuleNotFoundError(
                     f"模块 {module_name} 未实现 sign_in() 函数"
                 )
             
             # 检查函数是否可调用
             if not callable(sign_func):
-                raise ModuleNotFoundError(
+                raise SignModuleNotFoundError(
                     f"模块 {module_name} 中的函数不可调用"
                 )
             
@@ -115,20 +118,14 @@ class SignExecutor:
                 notify_func=notify_func
             )
             
-            logger.info(f"[DEBUG] sign_in()返回值: {result}, 类型: {type(result)}")
-            logger.info(f"[DEBUG] captured_messages: {captured_messages}")
-            
             # 处理返回值 - sign_in() 返回布尔值
             # 如果有捕获的消息，使用详细消息，否则使用通用消息
             is_success = bool(result)
-            logger.info(f"[DEBUG] is_success: {is_success}")
             
             if captured_messages:
                 message = captured_messages[-1]  # 使用最后一条消息
-                logger.info(f"[DEBUG] 使用captured message: {message}")
             else:
                 message = "签到成功" if is_success else "签到失败"
-                logger.info(f"[DEBUG] 使用default message: {message}")
             
             if is_success:
                 logger.info(f"签到成功: {task.site_name} - {message}")
@@ -148,8 +145,6 @@ class SignExecutor:
                     except Exception as rec_err:
                         logger.warning(f"记录结果失败: {rec_err}")
                 
-                # 返回成功消息
-                logger.info(f"[DEBUG] 返回message: {message}, 类型: {type(message)}")
                 return message
             else:
                 raise SignExecutionError(message or "签到失败")
@@ -208,7 +203,7 @@ class SignExecutor:
             logger.debug(f"加载模块: {module_name}")
             return module
         except ImportError as e:
-            raise ModuleNotFoundError(f"模块 {module_name} 不存在: {str(e)}")
+            raise SignModuleNotFoundError(f"模块 {module_name} 不存在: {str(e)}")
     
     async def _send_notification(
         self,
@@ -246,7 +241,7 @@ class SignExecutor:
         logger.error(f"错误处理: {task.site_name} - {error_msg}")
         
         # 分析错误类型
-        if isinstance(error, ModuleNotFoundError):
+        if isinstance(error, SignModuleNotFoundError):
             await self._send_notification(
                 site_name=task.site_name,
                 status="error",

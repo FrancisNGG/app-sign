@@ -3,7 +3,6 @@
 AcFun签到模块
 """
 import requests
-import asyncio
 from .. import safe_print, get_user_agent
 
 

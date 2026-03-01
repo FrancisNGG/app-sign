@@ -2,7 +2,6 @@
 """
 什么值得买（SMZDM）签到模块 - 使用 Cookie 方式
 """
-import asyncio
 import requests
 import time
 from .. import safe_print
@@ -72,7 +71,7 @@ def sign_in(site, config, notify_func):
                 try:
                     user_info_url = "https://api.smzdm.com/v1/user/info"
                     timestamp = int(time.time() * 1000)
-                    user_data = {
+                    user_req_data = {
                         "weixin": "1",
                         "f": "android",
                         "v": "8.7.8",
@@ -80,7 +79,7 @@ def sign_in(site, config, notify_func):
                     }
                     res_user = requests.post(
                         user_info_url,
-                        data=user_data,
+                        data=user_req_data,
                         cookies=cookies,
                         headers=headers,
                         timeout=20
@@ -89,8 +88,8 @@ def sign_in(site, config, notify_func):
                     if user_result.get('error_code') == '0' or user_result.get('error_code') == 0:
                         data = user_result.get('data', {})
                         # 签到信息在 checkin 字段中
-                        checkin_data = data.get('checkin', {})
-                        checkin_days = checkin_data.get('daily_attendance_number', '0')
+                        checkin_info = data.get('checkin', {})
+                        checkin_days = checkin_info.get('daily_attendance_number', '0')
                         smzdm_id = data.get('smzdm_id', '')
                         return f"连续签到天数: {checkin_days}", smzdm_id
                 except Exception as e:

@@ -2,7 +2,6 @@
 """
 有道云笔记签到模块
 """
-import asyncio
 import re
 import requests
 from .. import safe_print, get_user_agent

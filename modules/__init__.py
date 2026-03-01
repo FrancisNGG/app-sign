@@ -27,9 +27,16 @@ def safe_print(*args, **kwargs):
 
 
 def get_user_agent(config=None):
-    """从配置读取全局User-Agent，缺失时返回默认值"""
+    """从配置读取全局User-Agent，缺失时返回默认值
+    
+    配置结构为 config['global']['user_agent']，同时兼容顶层 config['user_agent']。
+    """
     if isinstance(config, dict):
-        value = config.get('user_agent')
+        # 优先从 global 子节点读取（正确路径）
+        value = (config.get('global') or {}).get('user_agent')
+        if not value:
+            # 兼容旧版顶层写法
+            value = config.get('user_agent')
         if isinstance(value, str) and value.strip():
             return value.strip()
     return DEFAULT_USER_AGENT

@@ -562,6 +562,23 @@
     </div>
 
     <script>
+        // ── 全局状态 ──────────────────────────────────────────────
+        let runningSiteNames = new Set();   // 当前正在执行签到的站点名集合
+        let _refreshTimer = null;           // 自适应刷新定时器
+
+        // 联合刷新：先拉任务状态（更新 runningSiteNames），再渲染卡片
+        async function refresh() {
+            await loadTaskStatus();
+            await loadSites();
+            _scheduleNextRefresh();
+        }
+
+        // 自适应调度：有任务运行中 3 s 一刷，空闲时 30 s 一刷
+        function _scheduleNextRefresh() {
+            if (_refreshTimer) clearTimeout(_refreshTimer);
+            _refreshTimer = setTimeout(refresh, runningSiteNames.size > 0 ? 3000 : 30000);
+        }
+
         // 初始化
         window.addEventListener('load', async () => {
             try {
@@ -571,12 +588,7 @@
                     window.location.href = '/auth';
                     return;
                 }
-                await loadSites();
-                await loadTaskStatus();
-                setInterval(() => {
-                    loadSites();
-                    loadTaskStatus();
-                }, 30000);
+                await refresh();
             } catch (error) {
                 console.error('初始化异常:', error);
             }
@@ -700,37 +712,27 @@
                     'unknown': '-'
                 }[lastSignStatus] || '-');
 
-                // 计算Cookie有效期和认证类型标签
-                const validUntil = site.cookie_status?.valid_until;
+                // 认证类型标签
                 const credentialType = site.credential_type || 'none';
                 
                 let credentialLabel = '';
                 
                 // 生成认证方式标签
                 if (credentialType === 'cookie' && site.cookie_status?.has_cookie) {
-                    if (validUntil) {
-                        const daysRemaining = calculateDaysRemaining(validUntil);
-                        if (daysRemaining > 7) {
-                            credentialLabel = `<span style="font-size: 12px; color: #4CAF50; margin-left: 8px;">✓ Cookie (${daysRemaining}天)</span>`;
-                        } else if (daysRemaining > 0) {
-                            credentialLabel = `<span style="font-size: 12px; color: #FFA500; margin-left: 8px;">⚠ Cookie (${daysRemaining}天)</span>`;
-                        } else {
-                            credentialLabel = `<span style="font-size: 12px; color: #f44336; margin-left: 8px;">✗ Cookie过期</span>`;
-                        }
-                    } else {
-                        credentialLabel = `<span style="font-size: 12px; color: #4CAF50; margin-left: 8px;">✓ Cookie</span>`;
-                    }
+                    credentialLabel = `<span style="font-size: 12px; color: #2196F3; margin-left: 8px;">🍪 Cookie</span>`;
                 } else if (credentialType === 'account') {
                     credentialLabel = `<span style="font-size: 12px; color: #2196F3; margin-left: 8px;">👤 账号密码</span>`;
                 } else if (credentialType === 'none') {
                     credentialLabel = `<span style="font-size: 12px; color: #ff9800; margin-left: 8px;">⚠️ 需要配置凭证</span>`;
                 }
 
+                const isRunning = runningSiteNames.has(site.aliases);
+
                 return `
                     <div class="site-card ${site.enabled ? '' : 'disabled'}">
                         <div class="site-header">
                             <span class="site-title" style="cursor: pointer; flex: 1;" onclick="openEditSiteModal('${site.aliases}', '${site.aliases}')" title="点击编辑此网站">${site.aliases}${credentialLabel}</span>
-                            <span class="site-status ${statusClass}">${statusText}</span>
+                            <span class="site-status ${isRunning ? 'status-pending' : statusClass}">${isRunning ? '⏳ 签到中...' : statusText}</span>
                         </div>
 
                         <div class="site-info">
@@ -767,17 +769,11 @@
                                         const nextMs = new Date(lastStr).getTime() + intervalMin * 60000;
                                         timeTag = ` · ${fmt(lastStr)} → 下次 ${fmt(new Date(nextMs))}`;
                                     }
-                                    // Cookie 有效期
                                     const meta = site.cookie_metadata;
-                                    let metaTag = '';
-                                    if (meta && meta.valid_until) {
-                                        const hoursLeft = (new Date(meta.valid_until) - new Date()) / 3600000;
-                                        const attempts = meta.refresh_attempts > 0 ? `，已重试 ${meta.refresh_attempts} 次` : '';
-                                        metaTag = hoursLeft > 0
-                                            ? `<br><span style="color:#888;font-size:11px">Cookie 剩余有效期 ${hoursLeft.toFixed(1)}h${attempts}</span>`
-                                            : `<br><span style="color:#f44336;font-size:11px">Cookie 已过期${attempts}</span>`;
-                                    }
-                                    return statusTag + timeTag + metaTag;
+                                    const attempts = (meta && meta.refresh_attempts > 0)
+                                        ? `<br><span style="color:#888;font-size:11px">已重试 ${meta.refresh_attempts} 次</span>`
+                                        : '';
+                                    return statusTag + timeTag + attempts;
                                 })()}</span>
                             </div>
                         </div>
@@ -788,8 +784,8 @@
                         </div>` : '<div class="site-result" style="display:none"><div class="result-message"></div></div>'}
 
                         <div class="site-actions">
-                            <button class="btn-small btn-action" onclick="execSign('${site.aliases}')">立即签到</button>
-                            <button class="btn-small btn-danger" onclick="removeSite('${site.aliases}')">移除</button>
+                            <button class="btn-small btn-action" onclick="execSign('${site.aliases}')" ${isRunning ? 'disabled' : ''}>${isRunning ? '⏳ 执行中...' : '立即签到'}</button>
+                            <button class="btn-small btn-danger" onclick="removeSite('${site.aliases}')" ${isRunning ? 'disabled' : ''}>移除</button>
                         </div>
                     </div>
                 `;
@@ -813,6 +809,7 @@
                 const data = await response.json();
                 
                 const stats = data.task_statistics || {};
+                runningSiteNames = new Set(stats.running_site_names || []);
                 document.getElementById('pendingTasks').textContent = stats.pending || 0;
                 document.getElementById('successToday').textContent = stats.success_today || 0;
             } catch (error) {
@@ -867,13 +864,18 @@
 
         // 立即签到
         async function execSign(siteName) {
-            const btn = event.target;
-            const originalText = btn.textContent;
-            btn.disabled = true;
-            btn.textContent = '⏳ 签到中...';
+            // 立刻加入本地运行集合，确保后续任何 loadSites() 重新渲染时按钮保持禁用
+            runningSiteNames.add(siteName);
+            await loadSites();   // 立即触发一次渲染，让按钮进入 disabled 状态
 
             const toastId = `sign-${siteName}`;
             showToast(`正在为 ${siteName} 执行签到任务...`, 'info', -1, toastId);
+
+            const _cleanup = async () => {
+                runningSiteNames.delete(siteName);
+                await loadSites();
+                _scheduleNextRefresh();
+            };
 
             try {
                 const response = await fetch(`/api/sign/${siteName}/execute`, {
@@ -885,37 +887,31 @@
                 const data = await response.json();
 
                 if (response.ok) {
-                    // 成功启动，现在轮询查询结果
+                    // 成功启动，轮询查询结果
                     let retryCount = 0;
                     const maxRetries = 10;  // 轮询10次，最多20秒
                     let foundResult = false;
 
                     const pollResult = setInterval(async () => {
                         retryCount++;
-                        
+
                         try {
                             const statusResp = await fetch(`/api/sign/${siteName}/status`, {
                                 credentials: 'include'
                             });
                             const statusData = await statusResp.json();
 
-                            // 检查是否有有效的结果
                             if (statusData.status === 'success' && statusData.data) {
                                 const result = statusData.data;
                                 foundResult = true;
                                 clearInterval(pollResult);
 
-                                // 显示最终结果
                                 if (result.status === 'success') {
-                                    // 显示成功消息，包含详细信息
                                     const msgLines = result.message ? result.message.split('\n') : [];
                                     const shortMsg = msgLines[0] || `✅ ${siteName} 签到成功`;
                                     showToast(shortMsg, 'success', 5000, toastId);
                                 } else {
-                                    // 显示详细错误信息
                                     let errorMsg = result.message || '签到失败';
-                                    
-                                    // 根据错误类型给出更友好的提示
                                     if (result.error_type === 'cookie_expired') {
                                         errorMsg = '❌ Cookie已失效，请重新登录';
                                     } else if (result.error_type === 'network_error') {
@@ -925,42 +921,30 @@
                                     } else {
                                         errorMsg = `❌ 签到失败：${errorMsg}`;
                                     }
-                                    
                                     showToast(errorMsg, 'error', 7000, toastId);
                                 }
 
-                                // 签到完成后立刻刷新卡片（从服务端取最新数据，含 last_sign_message）
-                                await loadSites();
+                                await _cleanup();
                             }
                         } catch (err) {
                             console.error('查询签到状态失败:', err);
                         }
 
-                        // 达到最大重试次数，停止轮询
                         if (retryCount >= maxRetries && !foundResult) {
                             clearInterval(pollResult);
                             showToast(`⏳ 签到任务已启动，请稍候确认结果`, 'info', 5000, toastId);
+                            await _cleanup();
                         }
                     }, 2000);
 
-                    // 更新卡片显示状态为"正在签到"
-                    const card = btn.closest('.site-card');
-                    if (card) {
-                        const statusDiv = card.querySelector('.site-status');
-                        if (statusDiv) {
-                            statusDiv.innerHTML = '<span class="pulse">⏳ 签到中...</span>';
-                            statusDiv.className = 'site-status status-pending';
-                        }
-                    }
                 } else {
                     showToast(`❌ 签到失败: ${data.message}`, 'error', 5000, toastId);
+                    await _cleanup();
                 }
             } catch (error) {
                 console.error('签到失败:', error);
                 showToast('❌ 网络错误，签到启动失败', 'error', 5000, toastId);
-            } finally {
-                btn.disabled = false;
-                btn.textContent = originalText;
+                await _cleanup();
             }
         }
 

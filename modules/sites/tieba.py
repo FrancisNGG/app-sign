@@ -62,7 +62,7 @@ def sign_in(site, config, notify_func):
         safe_print(f"[{name}] 获取关注的贴吧列表...")
         all_bars = []
         
-        # 获取第一页以确定总页数
+        # 获取第一页以确定总页数，并直接输出第一页贴吧列表
         first_page_url = 'https://tieba.baidu.com/f/like/mylike?pn=1'
         first_resp = session.get(first_page_url, timeout=10)
         
@@ -73,12 +73,17 @@ def sign_in(site, config, notify_func):
             return False
         
         # 提取总页数
-        total_pages_match = re.search(r'&pn=([^"]+)">尾页</a>', first_resp.text)
+        total_pages_match = re.search(r'&pn=([^"]+)">\u5c3e\u9875</a>', first_resp.text)
         total_pages = int(total_pages_match.group(1)) if total_pages_match else 1
-        safe_print(f"[{name}] 共{total_pages}页贴吧")
+        safe_print(f"[{name}] \u5171{total_pages}\u9875\u8d34\u5427")
         
-        # 遍历所有页面获取贴吧列表
-        for page in range(1, total_pages + 1):
+        # 直接解析第一页贴吧（避免重复请求）
+        bars = re.findall(r'href="/f\?kw=[^"]+"\s+title="([^"]+)"', first_resp.text)
+        all_bars.extend(bars)
+        safe_print(f"[{name}] \u7b2c1\u9875: \u627e\u5230{len(bars)}\u4e2a\u8d34\u5427")
+        
+        # 遍历剩余页面（从第 2 页开始）
+        for page in range(2, total_pages + 1):
             page_url = f'https://tieba.baidu.com/f/like/mylike?pn={page}'
             page_resp = session.get(page_url, timeout=10)
             

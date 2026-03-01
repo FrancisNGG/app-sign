@@ -133,8 +133,8 @@ def analyze_cookie_validity(cookie_dict):
             'expires_at': 'Unknown'
         }
     
-    # 找最新的时间戳（即最近的过期时间）
-    max_timestamp = max(timestamps.values())
+    # 找最早的时间戳（即最先过期的时间），以该时间戳作为 Cookie 有效期上限
+    max_timestamp = min(timestamps.values())
     max_key = [k for k, v in timestamps.items() if v == max_timestamp][0]
     
     now = time.time()
@@ -368,22 +368,17 @@ def verify_cookie_validity(site, config):
         }
 
 
-def calculate_next_refresh_time(cookie_dict, module=''):
+def calculate_next_refresh_time(cookie_dict):
     """
     计算下一次刷新时间：Cookie有效期结束后2分钟
     
     Args:
         cookie_dict: Cookie字典
-        module: 站点模块名（用于站点感知的 auth cookie 检查）
         
     Returns:
         datetime.datetime: 下次刷新的时间
     """
     analysis = analyze_cookie_validity(cookie_dict)
-
-    # 如果缺少登录态Cookie，尽快触发保活
-    if not has_auth_cookie(cookie_dict, module):
-        return datetime.datetime.now() + datetime.timedelta(seconds=30)
 
     # 无时间戳或已过期时，尽快触发保活，避免等待过久
     if not analysis['valid']:
@@ -447,7 +442,7 @@ def keepalive_task(site, config):
         steps.append(f"Cookie已过期，立即刷新")
     
     # ==================== 步骤2: 计算下次执行时间 ====================
-    next_exec_time = calculate_next_refresh_time(cookie_dict, _module)
+    next_exec_time = calculate_next_refresh_time(cookie_dict)
     print(f"\n[步骤2] 计算下次执行时间")
     print(f"  预定时间: {next_exec_time.strftime('%Y-%m-%d %H:%M:%S')}")
     steps.append(f"下次执行时间: {next_exec_time.strftime('%H:%M:%S')}")
@@ -465,7 +460,7 @@ def keepalive_task(site, config):
         
         # 重新计算下次执行时间
         cookie_dict = parse_cookie_string(cookie_raw)
-        next_exec_time = calculate_next_refresh_time(cookie_dict, _module)
+        next_exec_time = calculate_next_refresh_time(cookie_dict)
         
         steps.append(f"Playwright刷新成功，新Cookie：{len(cookie_raw)} characters")
         steps.append(f"下次执行时间更新为: {next_exec_time.strftime('%H:%M:%S')}")
